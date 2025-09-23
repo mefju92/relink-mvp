@@ -1,0 +1,194 @@
+<!-- public/index.html -->
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Relink – Folder Import</title>
+  <style>
+    :root { --bg:#0f1115; --card:#171a21; --muted:#9aa4b2; --fg:#e8ecf1; --acc:#4f8cff; --ok:#27c93f; --err:#ff5555; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:16px/1.5 system-ui,Segoe UI,Roboto,Arial; background:var(--bg); color:var(--fg); }
+    .wrap { max-width:980px; margin:40px auto; padding:0 16px; }
+    .card { background:var(--card); border:1px solid #222734; border-radius:16px; padding:20px; box-shadow:0 8px 24px rgba(0,0,0,.25); }
+    h1 { margin:0 0 8px; }
+    .muted { color:var(--muted); }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .row > .card { min-height: 240px; }
+    .btn { background:var(--acc); color:white; border:0; padding:12px 16px; border-radius:12px; font-weight:600; cursor:pointer; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .field { display:flex; gap:8px; align-items:center; }
+    input[type="text"] { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #2a3343; background:#0f131a; color:var(--fg); }
+    .pill { background:#0f131a; padding:8px 10px; border:1px solid #2a3343; border-radius:999px; text-align:center; display:inline-block; margin:4px 6px 0 0; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:8px 10px; border-bottom:1px solid #2a3343; font-size:14px; }
+    .progress { height:8px; background:#0f131a; border-radius:999px; overflow:hidden; margin-top:12px; border:1px solid #2a3343; }
+    .bar { height:100%; width:0%; background:var(--acc); transition: width .25s; }
+    a { color:var(--acc); text-decoration:none; }
+    .hint { font-size:13px; color:var(--muted); margin-top:6px; }
+    .small { font-size: 13px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Relink <span class="muted">Folder Import</span></h1>
+    <p class="muted">Wskaż folder z muzyką. Nic nie wysyłamy z dysku — do backendu leci tylko <b>lista nazw plików</b>. Backend wyszukuje utwory na Spotify, deduplikuje i tworzy playlistę.</p>
+
+    <div class="card">
+      <h3>1) Wybierz folder z audio</h3>
+      <button id="btnPick" class="btn">Wskaż folder…</button>
+      <div class="hint">Wspierane przeglądarki: Chrome/Edge/Brave/Opera (API: showDirectoryPicker). Skanowanie jest rekurencyjne. Rozszerzenia: mp3, m4a, aac, flac, wav, ogg.</div>
+      <div class="progress" hidden><div class="bar" id="bar"></div></div>
+      <p id="scanInfo" class="muted" style="margin-top:8px;"></p>
+      <div id="badges"></div>
+      <table id="filesTbl" style="margin-top:10px;">
+        <thead><tr><th>#</th><th>Relatywna ścieżka</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>2) Tworzenie playlisty</h3>
+      <div class="field" style="margin-bottom:10px;">
+        <label for="name" class="muted" style="min-width:140px;">Nazwa playlisty</label>
+        <input id="name" type="text" value="Relink import (from folder)" />
+      </div>
+      <div class="field" style="gap:12px; flex-wrap:wrap;">
+        <label class="muted"><input id="public" type="checkbox" /> Publiczna</label>
+        <label class="muted">Minimalny score <input id="minScore" type="text" value="0.55" style="width:80px;"></label>
+        <label class="muted">Limit wyników <input id="limit" type="text" value="7" style="width:70px;"></label>
+        <button id="btnCreate" class="btn" disabled>Utwórz playlistę</button>
+        <span id="createInfo" class="muted"></span>
+      </div>
+      <div class="small">Pod maską: backend czyści tytuły („official video”, „out now”, itp.), zgaduje <code>artist/title</code> z nazwy pliku, szuka na Spotify, liczy podobieństwo i deduplikuje po <code>track_id</code>.</div>
+    </div>
+
+    <p class="muted" style="margin-top:16px;">Backend: <a href="http://localhost:5174" target="_blank">http://localhost:5174</a></p>
+  </div>
+
+  <script>
+    const apiBase = 'http://localhost:5174';
+    const SUPPORTED = ['.mp3','.m4a','.aac','.flac','.wav','.ogg'];
+
+    const $ = sel => document.querySelector(sel);
+    const btnPick = $('#btnPick');
+    const btnCreate = $('#btnCreate');
+    const nameInput = $('#name');
+    const publicInput = $('#public');
+    const minScoreInput = $('#minScore');
+    const limitInput = $('#limit');
+    const scanInfo = $('#scanInfo');
+    const badges = $('#badges');
+    const filesTbody = $('#filesTbl tbody');
+    const progress = document.querySelector('.progress');
+    const bar = $('#bar');
+
+    let files = []; // { name, path }
+
+    function setProgress(pct, show=true) {
+      progress.hidden = !show;
+      bar.style.width = pct + '%';
+      if (pct >= 100) {
+        setTimeout(() => { progress.hidden = true; bar.style.width = '0%'; }, 600);
+      }
+    }
+
+    function isAudio(name) {
+      const low = name.toLowerCase();
+      return SUPPORTED.some(ext => low.endsWith(ext));
+    }
+
+    async function* walkDir(dirHandle, prefix='') {
+      for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file') {
+          if (isAudio(entry.name)) {
+            yield { name: entry.name, path: prefix + entry.name };
+          }
+        } else if (entry.kind === 'directory') {
+          yield* walkDir(entry, prefix + entry.name + '/');
+        }
+      }
+    }
+
+    btnPick.addEventListener('click', async () => {
+      try {
+        files = [];
+        filesTbody.innerHTML = '';
+        badges.innerHTML = '';
+        scanInfo.textContent = '';
+        btnCreate.disabled = true;
+        setProgress(10, true);
+
+        // wybierz folder
+        const dir = await window.showDirectoryPicker();
+        let count = 0;
+
+        for await (const f of walkDir(dir)) {
+          files.push(f);
+          count++;
+          if (count % 50 === 0) setProgress(10 + Math.min(70, Math.round((count/1000)*70))); // prosta animacja
+          if (files.length <= 200) { // nie renderuj w nieskończoność
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${count}</td><td>${f.path}</td>`;
+            filesTbody.appendChild(tr);
+          }
+        }
+        setProgress(90, true);
+
+        if (!files.length) {
+          scanInfo.textContent = 'Nie znaleziono plików audio w tym folderze.';
+          setProgress(100, true);
+          return;
+        }
+
+        // statsy
+        const pill = (txt) => `<span class="pill">${txt}</span>`;
+        badges.innerHTML = pill('Plików audio: ' + files.length) + pill('Rozszerzenia: ' + SUPPORTED.join(', '));
+        scanInfo.textContent = 'Gotowe do tworzenia playlisty.';
+        btnCreate.disabled = false;
+
+        setProgress(100, true);
+      } catch (e) {
+        setProgress(100, true);
+        if (e.name !== 'AbortError') {
+          alert('Błąd wybierania folderu: ' + e.message);
+        }
+      }
+    });
+
+    btnCreate.addEventListener('click', async () => {
+      if (!files.length) return;
+      btnCreate.disabled = true;
+      $('#createInfo').textContent = 'Wyszukiwanie i tworzenie playlisty… (to może chwilę potrwać)';
+
+      try {
+        setProgress(20, true);
+        const payload = {
+          files,
+          name: nameInput.value || 'Relink import',
+          public: publicInput.checked,
+          minScore: parseFloat(minScoreInput.value || '0.55'),
+          limit: parseInt(limitInput.value || '7', 10),
+        };
+
+        const res = await fetch(apiBase + '/create-playlist-from-files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        setProgress(100, true);
+        if (!res.ok) throw new Error(data.error || 'Create failed');
+
+        $('#createInfo').innerHTML = `Gotowe: <a href="${data.url}" target="_blank">${data.name}</a> — dodano ${data.added}/${data.unique} (z ${data.requested_files} plików)`;
+      } catch (e) {
+        setProgress(100, true);
+        $('#createInfo').textContent = '';
+        alert('Błąd tworzenia: ' + e.message);
+      } finally {
+        btnCreate.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

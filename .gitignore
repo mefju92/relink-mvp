@@ -1,0 +1,28 @@
+# dependencies
+**/node_modules/
+
+# build / cache
+**/dist/
+**/.vite/
+**/build/
+**/.turbo/
+**/.parcel-cache/
+
+# env (sekrety!)
+.env
+**/.env
+.env.local
+**/.env.local
+server/.env
+relink-ui/.env
+
+# logs
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# editor/system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
