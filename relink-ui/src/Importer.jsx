@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { supabase } from './supabaseClient'   // <— potrzebne do pobrania JWT
 
 function bytes(n) {
   if (n == null) return '-'
@@ -9,61 +10,56 @@ function bytes(n) {
 }
 
 async function safeJson(res) {
-  // Defensywne parsowanie: jeśli backend zwróci HTML, pokaż treść zamiast crasha
   const text = await res.text()
-  try {
-    return JSON.parse(text)
-  } catch {
-    throw new Error(`HTTP ${res.status}. Body starts with: ${text.slice(0,120)}`)
-  }
+  try { return JSON.parse(text) }
+  catch { throw new Error(`HTTP ${res.status}. Body starts with: ${text.slice(0,120)}`) }
 }
 
-export default function App() {
-  // UI state
-  const [tab, setTab] = useState('import') // 'import' | 'cloud'
+export default function Importer({ apiBase }) {
+  // UI
+  const [tab, setTab] = useState('import')
   const [playlistName, setPlaylistName] = useState('moja playlista')
   const [minScore, setMinScore] = useState(0.58)
 
-  // Local files
-  const [files, setFiles] = useState([]) // {file, name, artist, durationMs}…
+  // Lokalne pliki
+  const [files, setFiles] = useState([])
   const [selectedForCloud, setSelectedForCloud] = useState(new Set())
   const [scanning, setScanning] = useState(false)
-  const [matched, setMatched] = useState([]) // wynik /api/match
+  const [matched, setMatched] = useState([])
 
-  // Cloud
+  // Chmura
   const [cloudLoading, setCloudLoading] = useState(false)
   const [cloudFiles, setCloudFiles] = useState([])
 
   const folderInputRef = useRef(null)
   const multiInputRef = useRef(null)
 
-  // ===== Files handling =====
   function readTagFromName(name) {
-    // Bardzo prosty wyciąg artysta - tytuł z nazwy pliku
     const base = name.replace(/\.[^.]+$/, '')
     const parts = base.split(' - ')
-    if (parts.length >= 2) {
-      return { artist: parts[0], title: parts.slice(1).join(' - ') }
-    }
+    if (parts.length >= 2) return { artist: parts[0], title: parts.slice(1).join(' - ') }
     return { artist: '', title: base }
   }
 
   async function handleFiles(fileList) {
-    const arr = Array.from(fileList || [])
-      .filter(f => /\.(mp3|m4a|wav|flac|aac|ogg)$/i.test(f.name))
+    const arr = Array.from(fileList || []).filter(f => /\.(mp3|m4a|wav|flac|aac|ogg)$/i.test(f.name))
     const mapped = arr.map(f => {
       const t = readTagFromName(f.name)
-      return {
-        file: f,
-        name: f.name,
-        ...t,
-        durationMs: undefined, // można kiedyś policzyć z WebAudio, na razie opcjonalne
-      }
+      return { file: f, name: f.name, ...t, durationMs: undefined }
     })
     setFiles(prev => [...prev, ...mapped])
   }
 
-  // ===== Matching =====
+  // ===== Helpers: token + fetch =====
+  async function authHeaders() {
+    const { data } = await supabase.auth.getSession()
+    const token = data.session?.access_token
+    return {
+      Authorization: token ? `Bearer ${token}` : undefined,
+    }
+  }
+
+  // ===== Dopasowanie =====
   async function scanAndMatch() {
     if (!files.length) return alert('Najpierw dodaj pliki.')
     setScanning(true)
@@ -76,9 +72,12 @@ export default function App() {
           durationMs: f.durationMs || 0,
         })),
       }
-      const res = await fetch('/api/match', {
+      const res = await fetch(`${apiBase}/api/match`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(await authHeaders()),
+        },
         body: JSON.stringify(payload),
       })
       const data = await safeJson(res)
@@ -91,25 +90,31 @@ export default function App() {
     }
   }
 
-  // ===== Playlist create =====
+  // ===== Tworzenie playlisty =====
   async function createPlaylist() {
     const ok = matched.filter(m => m.spotifyId)
     if (!ok.length) return alert('Brak dopasowań do dodania.')
     try {
-      const res = await fetch('/api/playlist', {
+      // backend oczekuje: { name, trackUris: ["spotify:track:..."] }
+      const trackUris = ok.map(m => `spotify:track:${m.spotifyId}`)
+      const res = await fetch(`${apiBase}/api/playlist`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: playlistName, matched: ok }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(await authHeaders()),
+        },
+        body: JSON.stringify({ name: playlistName, trackUris }),
       })
       const data = await safeJson(res)
       if (!data.ok) throw new Error(data.error || 'playlist failed')
-      window.open(data.playlistUrl, '_blank')
+      if (data.playlistUrl) window.open(data.playlistUrl, '_blank')
+      else alert('Playlist utworzona (brak linku URL).')
     } catch (e) {
       alert('Błąd tworzenia playlisty: ' + e.message)
     }
   }
 
-  // ===== Cloud (Supabase) =====
+  // ===== Chmura (upload/lista) =====
   async function uploadToCloud() {
     const indices = [...selectedForCloud]
     if (!indices.length) return alert('Zaznacz pliki do chmury (kolumna „Do chmury”).')
@@ -119,11 +124,14 @@ export default function App() {
       if (f) form.append('files', f, f.name)
     })
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: form })
+      const res = await fetch(`${apiBase}/api/upload`, {
+        method: 'POST',
+        headers: { ...(await authHeaders()) },
+        body: form,
+      })
       const data = await safeJson(res)
       if (!data.ok) throw new Error(data.error || 'upload failed')
       alert(`Przeniesiono do chmury: ${data.files.filter(x => x.ok).length} plików`)
-      // Po uploadzie odśwież zakładkę chmury
       await loadCloud()
     } catch (e) {
       alert('Błąd chmury (upload): ' + e.message)
@@ -133,7 +141,9 @@ export default function App() {
   async function loadCloud() {
     setCloudLoading(true)
     try {
-      const res = await fetch('/cloud/list')
+      const res = await fetch(`${apiBase}/cloud/list`, {
+        headers: { ...(await authHeaders()) },
+      })
       const data = await safeJson(res)
       if (!data.ok) throw new Error(data.error || 'list failed')
       setCloudFiles(data.files || [])
@@ -150,7 +160,6 @@ export default function App() {
   }, [tab])
 
   const matchByIndex = useMemo(() => {
-    // mapuje indeks pliku -> dopasowanie (jeśli jest)
     const map = new Map()
     matched.forEach((m, idx) => { map.set(idx, m) })
     return map
