@@ -1,34 +1,24 @@
-// relink-ui/src/App.jsx
-import { useCallback, useState } from 'react';
-import { supabase } from './supabaseClient';
+import React from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import AuthLanding from './AuthLanding';
 import Importer from './Importer';
+import AuthCallback from './AuthCallback';
 
-const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5174';
+const apiBase = import.meta.env.VITE_API_URL;
 
 export default function App() {
-  const [view, setView] = useState('landing'); // 'landing' | 'app'
-
-  const handleAuthed = useCallback((_session) => {
-    // Użytkownik zalogowany – zostawiamy na „landing”, bo tam jest też przycisk „Otwórz importera”
-    // Jeśli chcesz automatycznie przenieść do importera:
-    // setView('app');
-  }, []);
-
-  // Prosty router na podstawie ścieżki
-  const path = typeof window !== 'undefined' ? window.location.pathname : '/';
-  if (path.startsWith('/app')) return <Importer />;
+  const [session, setSession] = React.useState(null);
 
   return (
-    <AuthLanding onAuthed={handleAuthed} apiBase={apiBase} />
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<AuthLanding onAuthed={setSession} apiBase={apiBase} />} />
+        <Route path="/app" element={<Importer apiBase={apiBase} />} />
+        {/* strona docelowa po kliknięciu w link z maila Supabase */}
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        {/* (opcjonalnie) fallback */}
+        <Route path="*" element={<AuthLanding onAuthed={setSession} apiBase={apiBase} />} />
+      </Routes>
+    </BrowserRouter>
   );
-
-
-+ import AuthCallback from './AuthCallback';
-
-<Routes>
-  <Route path="/" element={<AuthLanding onAuthed={handleAuthed} apiBase={apiBase} />} />
-+ <Route path="/auth/callback" element={<AuthCallback />} />
-  <Route path="/app" element={<Importer apiBase={apiBase} />} />
-</Routes>
 }

@@ -60,12 +60,13 @@ export default function AuthLanding({ onAuthed, apiBase }) {
   }
 
   // >>> TO JEST KLUCZOWE: doklejamy Bearer token do /spotify/login
-  async function connectSpotify() {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    const url = `${apiBase}/spotify/login?frontend=${encodeURIComponent(window.location.origin)}&token=${encodeURIComponent(token)}`;
-    window.location.href = url;
-  }
+ async function connectSpotify() {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token || '';
+  const url = `${apiBase}/spotify/login?frontend=${encodeURIComponent(window.location.origin)}&token=${encodeURIComponent(token)}`;
+  window.location.href = url;
+}
+
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-6">
