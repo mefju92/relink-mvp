@@ -22,4 +22,13 @@ export default function App() {
   return (
     <AuthLanding onAuthed={handleAuthed} apiBase={apiBase} />
   );
+
+
++ import AuthCallback from './AuthCallback';
+
+<Routes>
+  <Route path="/" element={<AuthLanding onAuthed={handleAuthed} apiBase={apiBase} />} />
++ <Route path="/auth/callback" element={<AuthCallback />} />
+  <Route path="/app" element={<Importer apiBase={apiBase} />} />
+</Routes>
 }

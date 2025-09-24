@@ -5,7 +5,7 @@ const cors = require('cors');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
-// ----- ENV -----
+// ===== ENV =====
 const {
   PORT = 5174,
   SPOTIFY_CLIENT_ID,
@@ -15,21 +15,22 @@ const {
   SUPABASE_SERVICE_ROLE_KEY,
   SUPABASE_BUCKET = 'audio',
   FRONTEND_URL = 'http://localhost:5173',
-  // Na Render ustaw na: https://<twoja-usługa>.onrender.com/spotify/callback
+  // Na produkcji (Render): https://twoja-usluga.onrender.com/spotify/callback
   SPOTIFY_REDIRECT_URI = 'http://localhost:5174/spotify/callback',
 } = process.env;
 
-// ----- Supabase admin client (SERVICE KEY!) -----
+// ===== Supabase admin (SERVICE ROLE!) =====
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// ----- Express -----
+// ===== App =====
 const app = express();
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors({
+  origin: [FRONTEND_URL, 'http://localhost:5173'],
+  credentials: true,
+}));
 app.use(express.json({ limit: '20mb' }));
 
-// ===== Pomocnicze =====
-
-// wyciągnięcie zalogowanego usera z Bearer: <supabase_jwt>
+// ===== Helpers =====
 async function getUserFromBearer(req) {
   try {
     const auth = req.headers.authorization || '';
@@ -43,7 +44,6 @@ async function getUserFromBearer(req) {
   }
 }
 
-// pobranie rekordu z tabeli user_spotify_tokens
 async function getUserSpotifyRow(userId) {
   const { data, error } = await supabaseAdmin
     .from('user_spotify_tokens')
@@ -54,7 +54,6 @@ async function getUserSpotifyRow(userId) {
   return data;
 }
 
-// odświeżenie access_token jeśli wygasł
 async function refreshSpotifyAccessToken(userId, row) {
   if (!row?.refresh_token) return null;
 
@@ -103,7 +102,6 @@ async function ensureSpotifyAccessToken(userId) {
   return await refreshSpotifyAccessToken(userId, row);
 }
 
-// prosty fetch do Spotify z obsługą błędów
 async function spotifyFetch(accessToken, url, opts = {}) {
   const res = await fetch(url, {
     method: opts.method || 'GET',
@@ -115,7 +113,6 @@ async function spotifyFetch(accessToken, url, opts = {}) {
     body: opts.body || undefined,
   });
 
-  // 204 No Content (np. po dodaniu tracków)
   if (res.status === 204) return null;
 
   let data = null;
@@ -132,7 +129,7 @@ async function spotifyFetch(accessToken, url, opts = {}) {
   return data;
 }
 
-// ===== LOG startu =====
+// ===== Log startu =====
 console.log('=== ReLink API start ===');
 console.log('Port:', PORT);
 console.log('Spotify:', {
@@ -147,29 +144,29 @@ console.log('Supabase:', {
 console.log('Frontend URL:', FRONTEND_URL);
 console.log('Spotify Redirect URI:', SPOTIFY_REDIRECT_URI);
 
-// ===== Proste endpointy =====
+// ===== Info / ping =====
 app.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 app.get('/', (_req, res) => {
   res.type('text/plain').send(
 `ReLink API
 
-GET  /ping            → zdrowie serwera
-POST /api/bootstrap   → utwórz prywatny folder użytkownika (wymaga Bearer supabase)
-GET  /cloud/list      → lista plików w chmurze (wymaga Bearer supabase)
+GET  /ping
+POST /api/bootstrap   (Bearer Supabase)
+GET  /cloud/list      (Bearer Supabase)
 
 Spotify per user:
-GET  /spotify/login    → start OAuth
-GET  /spotify/callback → zapis tokenów per user (SERVICE ROLE)
+GET  /spotify/login    (start OAuth)
+GET  /spotify/callback (zapis tokenów per user)
 
-POST /api/playlist     → tworzenie playlisty na koncie użytkownika (per-user tokens)
+POST /api/playlist    (tworzy playlistę na koncie użytkownika)
 
 Frontend: ${FRONTEND_URL}
 `
   );
 });
 
-// ===== CHMURA (MVP) =====
+// ===== Chmura (MVP) =====
 app.post('/api/bootstrap', async (req, res) => {
   const user = await getUserFromBearer(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
@@ -208,7 +205,7 @@ app.get('/cloud/list', async (req, res) => {
   }
 });
 
-// ===== SPOTIFY OAuth per user =====
+// ===== Spotify OAuth per user =====
 const OAUTH_SCOPE = [
   'playlist-modify-private',
   'playlist-modify-public',
@@ -216,12 +213,16 @@ const OAUTH_SCOPE = [
   'user-read-email',
 ].join(' ');
 
+// pamięć „state” -> { frontend, token }
 const oauthStates = Object.create(null);
 
+// 1) start OAuth – TOKEN Supabase przekazujemy w query i zapamiętujemy z „state”
 app.get('/spotify/login', async (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
   const frontend = req.query.frontend || FRONTEND_URL;
-  oauthStates[state] = { frontend, createdAt: Date.now() };
+  const sbToken = req.query.token || null;
+
+  oauthStates[state] = { frontend, token: sbToken, createdAt: Date.now() };
 
   const url = new URL('https://accounts.spotify.com/authorize');
   url.searchParams.set('response_type', 'code');
@@ -232,17 +233,16 @@ app.get('/spotify/login', async (req, res) => {
   res.redirect(url.toString());
 });
 
+// 2) callback – bierzemy TOKEN z oauthStates, zapisujemy tokeny do tabeli user_spotify_tokens
 app.get('/spotify/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     const mem = oauthStates[state];
     if (!mem) return res.status(400).send('State mismatch lub wygasły.');
-    delete oauthStates[state];
 
-    // oczekujemy, że front wywoła callback z nagłówkiem Authorization: Bearer <supabase_jwt>
-    const auth = req.headers.authorization || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    const token = mem?.token || null;
     if (!token) {
+      delete oauthStates[state];
       return res.send(`<html><body style="font-family:system-ui;padding:20px">
         <h3>Połączenie Spotify</h3>
         <p>Brak sesji użytkownika. Wróć do aplikacji i spróbuj ponownie po zalogowaniu.</p>
@@ -253,6 +253,7 @@ app.get('/spotify/callback', async (req, res) => {
     const { data } = await supabaseAdmin.auth.getUser(token);
     const user = data?.user || null;
     if (!user) {
+      delete oauthStates[state];
       return res.send(`<html><body style="font-family:system-ui;padding:20px">
         <h3>Połączenie Spotify</h3>
         <p>Brak użytkownika. Zaloguj się w aplikacji i spróbuj ponownie.</p>
@@ -278,6 +279,7 @@ app.get('/spotify/callback', async (req, res) => {
 
     const tok = await tokenResp.json();
     if (!tokenResp.ok) {
+      delete oauthStates[state];
       return res.status(400).send('Błąd token exchange: ' + (tok.error_description || tok.error || ''));
     }
 
@@ -293,11 +295,12 @@ app.get('/spotify/callback', async (req, res) => {
     const { error } = await supabaseAdmin
       .from('user_spotify_tokens')
       .upsert(upsert, { onConflict: 'user_id' });
-
     if (error) {
+      delete oauthStates[state];
       return res.status(500).send('Błąd zapisu tokenów: ' + error.message);
     }
 
+    delete oauthStates[state];
     return res.send(`<html><body style="font-family:system-ui;padding:20px">
       <h3>Połączenie Spotify aktywne ✅</h3>
       <p>Możesz wrócić do aplikacji.</p>
@@ -308,7 +311,7 @@ app.get('/spotify/callback', async (req, res) => {
   }
 });
 
-// ===== Tworzenie playlisty na koncie użytkownika (per-user tokens) =====
+// ===== Tworzenie playlisty (per-user) =====
 app.post('/api/playlist', async (req, res) => {
   try {
     const user = await getUserFromBearer(req);
@@ -360,7 +363,7 @@ app.post('/api/playlist', async (req, res) => {
   }
 });
 
-// ----- Start -----
+// ===== Start =====
 app.listen(PORT, () => {
   console.log(`API on http://localhost:${PORT}`);
 });

@@ -26,7 +26,8 @@ export default function AuthLanding({ onAuthed, apiBase }) {
       email,
       password: pass,
       options: {
-        emailRedirectTo: window.location.origin, // po kliknięciu w e-mail
+        // po kliknięciu w link z maila wracamy na /auth/callback (dodałeś to w Supabase)
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
     setLoading(false);
@@ -42,14 +43,14 @@ export default function AuthLanding({ onAuthed, apiBase }) {
     if (error) setMsg(`Błąd logowania: ${error.message}`);
     else {
       setMsg('Zalogowano.');
-      // poproś backend o „bootstrap” chmury (folder w storage)
+      // utwórz prywatny folder w storage po zalogowaniu
       const token = data.session?.access_token;
       try {
         await fetch(`${apiBase}/api/bootstrap`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
         });
-      } catch (e) { /* no-op w MVP */ }
+      } catch { /* ignore w MVP */ }
     }
   }
 
@@ -58,12 +59,12 @@ export default function AuthLanding({ onAuthed, apiBase }) {
     window.location.reload();
   }
 
+  // >>> TO JEST KLUCZOWE: doklejamy Bearer token do /spotify/login
   async function connectSpotify() {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
-    const url = `${apiBase}/spotify/login`;
-    // backend zweryfikuje token z Bearer
-    window.location.href = url + `?frontend=${encodeURIComponent(window.location.origin)}`;
+    const url = `${apiBase}/spotify/login?frontend=${encodeURIComponent(window.location.origin)}&token=${encodeURIComponent(token)}`;
+    window.location.href = url;
   }
 
   return (
