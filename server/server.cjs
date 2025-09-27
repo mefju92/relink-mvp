@@ -1,7 +1,8 @@
 // server/server.cjs
 require('dotenv').config();
 const express = require('express');
-// node-fetch v3 jest ESM – ładujemy dynamicznie:
+const crypto = require('crypto');
+// node-fetch v3 (ESM) – ładujemy dynamicznie:
 const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
 
 const {
@@ -10,18 +11,18 @@ const {
   SPOTIFY_CLIENT_SECRET,
   SPOTIFY_REFRESH_TOKEN,
   PLAYLIST_NAME = 'ReLink Import',
-  // Ustaw na URL Netlify, np. "https://stupendous-marshmallow-e107a7.netlify.app"
+  // dla CORS ustaw na URL Netlify, np.
+  // CORS_ORIGIN=https://stupendous-marshmallow-e107a7.netlify.app
   CORS_ORIGIN,
 } = process.env;
 
 const app = express();
 
-// --- CORS bez tras typu "*" (zgodne z Express 5) ---
+/* ---------------- CORS (bez tras typu "*", zgodnie z Express 5) ---------------- */
 app.use((req, res, next) => {
   const allowOrigin = CORS_ORIGIN || req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', allowOrigin);
   res.setHeader('Vary', 'Origin');
-  // Jeśli używasz cookies – ustaw true; dla tokenów w headerze może być false
   res.setHeader('Access-Control-Allow-Credentials', 'false');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -31,7 +32,14 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '20mb' }));
 
-// ====== Spotify token (globalny, z REFRESH TOKEN) ======
+/* ---------------- helpers ---------------- */
+function getBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
+/* ---------------- Spotify token (globalny – z refresh tokena) ---------------- */
 let accessToken = null;
 let tokenExpiresAt = 0;
 
@@ -61,7 +69,7 @@ async function getAccessToken() {
   return accessToken;
 }
 
-// ====== Proste skoring/dopasowanie ======
+/* ---------------- Dopasowanie / scoring ---------------- */
 function coreTitle(s) {
   return (s || '')
     .toLowerCase()
@@ -101,7 +109,6 @@ function scoreCandidate(local, sp) {
   const durScore = durationScore(local.durationMs, sp.duration_ms);
   return 0.5 * titleScore + 0.35 * artistScore + 0.15 * durScore;
 }
-
 async function spotifySearch(q, limit = 5) {
   const token = await getAccessToken();
   const url = new URL('https://api.spotify.com/v1/search');
@@ -113,7 +120,6 @@ async function spotifySearch(q, limit = 5) {
   if (!res.ok) throw new Error(`search error ${res.status}: ${JSON.stringify(json)}`);
   return json.tracks?.items || [];
 }
-
 async function getUserId() {
   const token = await getAccessToken();
   const res = await fetch('https://api.spotify.com/v1/me', {
@@ -124,9 +130,85 @@ async function getUserId() {
   return j.id;
 }
 
-// ====== Routes ======
+/* ---------------- ROUTES ---------------- */
+
 app.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
+// 1) START OAuth – albo szybki powrót, jeśli mamy już REFRESH TOKEN
+app.get('/spotify/login', (req, res) => {
+  const frontend = req.query.frontend || CORS_ORIGIN || '/';
+  if (SPOTIFY_REFRESH_TOKEN) {
+    // mamy stały refresh token – nie trzeba logować; wracamy do UI
+    const url = `${frontend.replace(/\/$/, '')}/app?spotify=connected`;
+    return res.redirect(302, url);
+  }
+  // pełny OAuth
+  const redirect_uri = `${getBaseUrl(req)}/spotify/callback`;
+  const scope = 'playlist-modify-private playlist-modify-public user-read-email';
+  const state = Buffer.from(JSON.stringify({ f: frontend }), 'utf8').toString('base64url');
+  const authUrl =
+    'https://accounts.spotify.com/authorize?' +
+    new URLSearchParams({
+      client_id: SPOTIFY_CLIENT_ID,
+      response_type: 'code',
+      redirect_uri,
+      scope,
+      state,
+    }).toString();
+  res.redirect(authUrl);
+});
+
+// 2) CALLBACK Spotify – wymiana code -> tokeny, wyświetlenie REFRESH TOKEN
+app.get('/spotify/callback', async (req, res) => {
+  try {
+    const { code, state, error } = req.query;
+    const frontend = (() => {
+      try { return JSON.parse(Buffer.from(state || '', 'base64url').toString()).f; }
+      catch { return CORS_ORIGIN || '/'; }
+    })();
+
+    if (error) {
+      return res.redirect(`${frontend.replace(/\/$/, '')}/app?spotify=error&reason=${encodeURIComponent(error)}`);
+    }
+    if (!code) return res.status(400).send('<pre>Brak ?code z Spotify</pre>');
+
+    const redirect_uri = `${getBaseUrl(req)}/spotify/callback`;
+    const r = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: {
+        Authorization:
+          'Basic ' + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64'),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri,
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) {
+      return res.status(400).send(`<pre>Token exchange failed ${r.status}\n${JSON.stringify(j, null, 2)}</pre>`);
+    }
+
+    const refresh = j.refresh_token;
+    if (refresh) {
+      console.log('=== SPOTIFY REFRESH TOKEN ===\n' + refresh + '\n============================');
+    }
+
+    const back = `${frontend.replace(/\/$/, '')}/app?spotify=ok`;
+    res.send(`<!doctype html><meta charset="utf-8">
+      <h3>Połączono z Spotify ✅</h3>
+      ${refresh ? `<p><b>REFRESH_TOKEN:</b> <code>${refresh}</code></p>
+      <p>Dodaj go w Render → Environment jako <code>SPOTIFY_REFRESH_TOKEN</code> i zdeployuj backend.</p>` : ''}
+      <p>Za chwilę wrócisz do aplikacji…</p>
+      <script>setTimeout(()=>location.href=${JSON.stringify(back)}, 1200)</script>`);
+  } catch (e) {
+    res.status(500).send(`<pre>${String(e)}</pre>`);
+  }
+});
+
+// 3) Dopasowanie
 app.post('/api/match', async (req, res) => {
   try {
     const { tracks = [], minScore = 0.58 } = req.body || {};
@@ -152,7 +234,7 @@ app.post('/api/match', async (req, res) => {
       } else {
         results.push({ input: t, spotifyId: null, score: Number(bestScore.toFixed(3)) });
       }
-      await new Promise(r => setTimeout(r, 120)); // proste oddechy anty-429
+      await new Promise(r => setTimeout(r, 120));
     }
     res.json({ ok: true, results });
   } catch (e) {
@@ -160,7 +242,8 @@ app.post('/api/match', async (req, res) => {
   }
 });
 
-// front wysyła: { name, trackUris: ["spotify:track:..."] }
+// 4) Tworzenie playlisty
+// body: { name, trackUris: ["spotify:track:..."] }
 app.post('/api/playlist', async (req, res) => {
   try {
     const { name = PLAYLIST_NAME, trackUris = [] } = req.body || {};
@@ -198,7 +281,7 @@ app.post('/api/playlist', async (req, res) => {
   }
 });
 
-// --- start ---
+/* ---------------- start ---------------- */
 app.listen(PORT, () => {
   console.log(`API on http://localhost:${PORT}`);
   console.log('CORS_ORIGIN:', CORS_ORIGIN || '(*)');
