@@ -12,7 +12,6 @@ const {
 } = process.env;
 
 // ---- CORS (Express 5) ----
-// W Express 5 nie używamy '*' w ścieżkach — trzeba '(.*)'
 const allowedOrigins = new Set([
   'http://localhost:5173',
   'http://localhost:5174',
@@ -21,8 +20,7 @@ const allowedOrigins = new Set([
 
 const corsOptions = {
   origin(origin, cb) {
-    // bez origin (np. curl) – przepuszczamy
-    if (!origin) return cb(null, true);
+    if (!origin) return cb(null, true);                 // np. curl / healthcheck
     cb(null, allowedOrigins.has(origin));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -33,7 +31,13 @@ const corsOptions = {
 
 const app = express();
 app.use(cors(corsOptions));
-app.options('(.*)', cors(corsOptions)); // UWAGA: '(.*)', nie '*'
+// Zamiast app.options('*'|'(.*)') — prosta odpowiedź 204 na preflight.
+// (Nagłówki CORS już zostały ustawione przez powyższe app.use(cors(...)) )
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 app.use(express.json({ limit: '20mb' }));
 
 // ---- Log startu ----
@@ -52,7 +56,6 @@ app.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 //  Używa tokena aplikacyjnego (client_credentials) do wyszukiwania.
 // ===================================================================
 
-// proste czyszczenie tytułów
 function coreTitle(s = '') {
   return s
     .toLowerCase()
@@ -64,19 +67,13 @@ function coreTitle(s = '') {
     .replace(/\s+/g, ' ')
     .trim();
 }
-
-function normArtist(a = '') {
-  return a.toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
+function normArtist(a = '') { return a.toLowerCase().replace(/\s+/g, ' ').trim(); }
 function jaccard(a, b) {
-  const A = new Set(a.split(' '));
-  const B = new Set(b.split(' '));
+  const A = new Set(a.split(' ')), B = new Set(b.split(' '));
   const I = [...A].filter((x) => B.has(x)).length;
   const U = new Set([...A, ...B]).size || 1;
   return I / U;
 }
-
 function durationScore(localMs, spMs) {
   if (!localMs || !spMs) return 0.5;
   const diff = Math.abs(localMs - spMs);
@@ -87,21 +84,18 @@ function durationScore(localMs, spMs) {
   if (diff <= 12000) return 0.5;
   return 0.3;
 }
-
 function scoreCandidate(local, sp) {
   const tLocal = coreTitle(local.title);
   const tSp = coreTitle(sp.name);
   const aLocal = normArtist(local.artist || '');
   const aSp = normArtist((sp.artists || []).map((x) => x.name).join(' & '));
-
   const titleScore = jaccard(tLocal, tSp);
   const artistScore = aLocal ? jaccard(aLocal, aSp) : 0.5;
   const durScore = durationScore(local.durationMs, sp.duration_ms);
-
   return 0.5 * titleScore + 0.35 * artistScore + 0.15 * durScore;
 }
 
-// token aplikacyjny (client_credentials)
+// token aplikacyjny (client_credentials) — Node 22 ma globalny fetch
 let appToken = null;
 let appTokenExp = 0;
 
@@ -114,8 +108,7 @@ async function getAppToken() {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       Authorization:
-        'Basic ' +
-        Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64'),
+        'Basic ' + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64'),
     },
     body: new URLSearchParams({ grant_type: 'client_credentials' }),
   });
@@ -134,9 +127,7 @@ async function spotifySearch(q, limit = 5) {
   url.searchParams.set('q', q);
   url.searchParams.set('type', 'track');
   url.searchParams.set('limit', String(limit));
-  const r = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
   const j = await r.json();
   if (!r.ok) throw new Error(`search ${r.status}: ${JSON.stringify(j)}`);
   return j.tracks?.items || [];
@@ -148,20 +139,13 @@ app.post('/api/match', async (req, res) => {
     const results = [];
 
     for (const t of tracks) {
-      const q = [coreTitle(t.title), t.artist ? ` artist:${t.artist}` : '']
-        .join(' ')
-        .trim();
-
+      const q = [coreTitle(t.title), t.artist ? ` artist:${t.artist}` : ''].join(' ').trim();
       const items = await spotifySearch(q, 5);
 
-      let best = null;
-      let bestScore = 0;
+      let best = null, bestScore = 0;
       for (const it of items) {
         const s = scoreCandidate(t, it);
-        if (s > bestScore) {
-          bestScore = s;
-          best = it;
-        }
+        if (s > bestScore) { bestScore = s; best = it; }
       }
 
       if (best && bestScore >= minScore) {
@@ -175,15 +159,10 @@ app.post('/api/match', async (req, res) => {
           score: Number(bestScore.toFixed(3)),
         });
       } else {
-        results.push({
-          input: t,
-          spotifyId: null,
-          score: Number(bestScore.toFixed(3)),
-        });
+        results.push({ input: t, spotifyId: null, score: Number(bestScore.toFixed(3)) });
       }
 
-      // drobny throttle, by nie złapać 429
-      await new Promise((r) => setTimeout(r, 120));
+      await new Promise((r) => setTimeout(r, 120)); // lekki throttle
     }
 
     res.json({ ok: true, results });
@@ -193,8 +172,7 @@ app.post('/api/match', async (req, res) => {
   }
 });
 
-// (opcjonalnie) placeholder by „Utwórz playlistę” nie waliło 404.
-// W tej wersji nie tworzymy playlist (wymaga user-tokenu).
+// Placeholder (ta wersja nie tworzy playlist bez user-tokenu)
 app.post('/api/playlist', (_req, res) => {
   res.status(501).json({ ok: false, error: 'Playlist not implemented in this build.' });
 });
