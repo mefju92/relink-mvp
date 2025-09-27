@@ -1,7 +1,8 @@
 // relink-ui/src/Importer.jsx
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { supabase } from './supabaseClient'   // potrzebne do pobrania JWT
+import { useEffect, useRef, useState } from 'react'
+import { supabase } from './supabaseClient'
 
+// === utils ===
 function bytes(n) {
   if (n == null) return '-'
   const u = ['B','KB','MB','GB']
@@ -16,51 +17,121 @@ async function safeJson(res) {
   catch { throw new Error(`HTTP ${res.status}. Body starts with: ${text.slice(0,120)}`) }
 }
 
+function cleanWhitespace(str = '') {
+  return str.replace(/\s{2,}/g, ' ').trim()
+}
+
+const NOISE_PATTERNS = [
+  /\b(out\s*now)\b/ig,
+  /\bofficial(?:\s+music)?\s+(?:video|audio)\b/ig,
+  /\bofficial\b/ig,
+  /\blyrics?\b/ig,
+  /\blyric\s+video\b/ig,
+  /\bvisuali[sz]er\b/ig,
+  /\b(HD|4K|8K)\b/ig,
+  /\b(explicit|clean|dirty)\b/ig,
+  /\s*-\s*copy(?:\s*\(\d+\))?\s*$/ig,
+  /https?:\/\/\S+/ig,
+  /\b(youtu\.?be|soundcloud|facebook|instagram|tiktok|linktr\.ee)\b/ig,
+]
+
+// usuń dopiski + nawiasy [] () {}
+function removeNoise(str = '') {
+  let x = str
+  x = x.replace(/\.(mp3|m4a|wav|flac|aac|ogg)$/i, '')    // rozszerzenie
+  x = x.replace(/[_·•]+/g, ' ')                          // separatory
+  x = x.replace(/\s*[\[\(\{](?:https?:\/\/|www\.)?.*?[\]\)\}]\s*/g, ' ')
+  for (const re of NOISE_PATTERNS) x = x.replace(re, ' ')
+  return cleanWhitespace(x)
+}
+
+// wytnij feat
+function stripFeat(s = '') {
+  return cleanWhitespace(
+    s
+      .replace(/\s*\((feat|ft\.?)\s.+?\)/ig, ' ')
+      .replace(/\s*-\s*(feat|ft\.?)\s.+$/ig, ' ')
+  )
+}
+
+// *** WŁAŚCIWA wersja parsera nazwy pliku ***
+function readTagFromName(name = '') {
+  const base = removeNoise(name)
+  const seps = [' - ', ' – ', ' — ']
+  let idx = -1, sep = ' - '
+  for (const s of seps) { const i = base.indexOf(s); if (i !== -1) { idx = i; sep = s; break } }
+  if (idx !== -1) {
+    const artist = cleanWhitespace(base.slice(0, idx))
+    const title  = stripFeat(cleanWhitespace(base.slice(idx + sep.length)))
+    return { artist, title }
+  }
+  return { artist: '', title: stripFeat(base) }
+}
+
+// zmierz długość utworu
+function measureDurationMs(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const a = new Audio()
+    a.preload = 'metadata'
+    a.src = url
+    a.onloadedmetadata = () => {
+      const ms = Number.isFinite(a.duration) ? Math.round(a.duration * 1000) : 0
+      URL.revokeObjectURL(url)
+      resolve(ms || 0)
+    }
+    a.onerror = () => { URL.revokeObjectURL(url); resolve(0) }
+  })
+}
+
+// delikatne czyszczenie tytułów/artystów (payload -> /api/match)
+const CLEAN_PARENS_RX = /\s*\((?:official|music\s*video|video|audio|lyrics?|original\s*mix|extended\s*mix|radio\s*edit|remaster(?:ed)?(?:\s*\d{4})?|copy.*)\)\s*$/gi
+const CLEAN_COPY_RX = /-\s*copy(\s*\(\d+\))?/gi
+function cleanTitle(s) {
+  return (s || '')
+    .replace(CLEAN_PARENS_RX, '')
+    .replace(CLEAN_COPY_RX, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+function cleanArtist(s) {
+  return (s || '').replace(/\s*-\s*topic$/i, '').trim()
+}
+
+// === component ===
 export default function Importer({ apiBase }) {
-  // UI
   const [tab, setTab] = useState('import')
   const [playlistName, setPlaylistName] = useState('moja playlista')
   const [minScore, setMinScore] = useState(0.58)
 
-  // Lokalne pliki
   const [files, setFiles] = useState([])
   const [selectedForCloud, setSelectedForCloud] = useState(new Set())
   const [scanning, setScanning] = useState(false)
   const [matched, setMatched] = useState([])
 
-  // Chmura
   const [cloudLoading, setCloudLoading] = useState(false)
   const [cloudFiles, setCloudFiles] = useState([])
 
   const folderInputRef = useRef(null)
   const multiInputRef = useRef(null)
 
-  function readTagFromName(name) {
-    const base = name.replace(/\.[^.]+$/, '')
-    const parts = base.split(' - ')
-    if (parts.length >= 2) return { artist: parts[0], title: parts.slice(1).join(' - ') }
-    return { artist: '', title: base }
-  }
-
   async function handleFiles(fileList) {
     const arr = Array.from(fileList || []).filter(f => /\.(mp3|m4a|wav|flac|aac|ogg)$/i.test(f.name))
-    const mapped = arr.map(f => {
-      const t = readTagFromName(f.name)
-      return { file: f, name: f.name, ...t, durationMs: undefined }
-    })
+    const mapped = await Promise.all(arr.map(async (f) => {
+      const { artist, title } = readTagFromName(f.name)
+      const durationMs = await measureDurationMs(f)
+      return { file: f, name: f.name, artist, title, durationMs }
+    }))
     setFiles(prev => [...prev, ...mapped])
   }
 
-  // ===== Helpers: token + fetch =====
   async function authHeaders() {
     const { data } = await supabase.auth.getSession()
     const token = data.session?.access_token
-    return {
-      Authorization: token ? `Bearer ${token}` : undefined,
-    }
+    return token ? { Authorization: `Bearer ${token}` } : {}
   }
 
-  // ===== Dopasowanie =====
+  // dopasowanie
   async function scanAndMatch() {
     if (!files.length) return alert('Najpierw dodaj pliki.')
     setScanning(true)
@@ -68,17 +139,14 @@ export default function Importer({ apiBase }) {
       const payload = {
         minScore,
         tracks: files.map(f => ({
-          title: f.title || f.name,
-          artist: f.artist || '',
+          title: cleanTitle(f.title || f.name),
+          artist: cleanArtist(f.artist || ''),
           durationMs: f.durationMs || 0,
         })),
       }
       const res = await fetch(`${apiBase}/api/match`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(await authHeaders()),
-        },
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
         body: JSON.stringify(payload),
       })
       const data = await safeJson(res)
@@ -91,7 +159,7 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  // ===== Tworzenie playlisty =====
+  // playlisty
   async function createPlaylist() {
     const ok = matched.filter(m => m.spotifyId)
     if (!ok.length) return alert('Brak dopasowań do dodania.')
@@ -99,10 +167,7 @@ export default function Importer({ apiBase }) {
       const trackUris = ok.map(m => `spotify:track:${m.spotifyId}`)
       const res = await fetch(`${apiBase}/api/playlist`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(await authHeaders()),
-        },
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
         body: JSON.stringify({ name: playlistName, trackUris }),
       })
       const data = await safeJson(res)
@@ -114,15 +179,12 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  // ===== Chmura (upload/lista) =====
+  // chmura
   async function uploadToCloud() {
     const indices = [...selectedForCloud]
     if (!indices.length) return alert('Zaznacz pliki do chmury (kolumna „Do chmury”).')
     const form = new FormData()
-    indices.forEach(i => {
-      const f = files[i]?.file
-      if (f) form.append('files', f, f.name)
-    })
+    indices.forEach(i => { const f = files[i]?.file; if (f) form.append('files', f, f.name) })
     try {
       const res = await fetch(`${apiBase}/api/upload`, {
         method: 'POST',
@@ -141,9 +203,7 @@ export default function Importer({ apiBase }) {
   async function loadCloud() {
     setCloudLoading(true)
     try {
-      const res = await fetch(`${apiBase}/cloud/list`, {
-        headers: { ...(await authHeaders()) },
-      })
+      const res = await fetch(`${apiBase}/cloud/list`, { headers: { ...(await authHeaders()) } })
       const data = await safeJson(res)
       if (!data.ok) throw new Error(data.error || 'list failed')
       setCloudFiles(data.files || [])
@@ -154,34 +214,19 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  useEffect(() => {
-    if (tab === 'cloud') loadCloud()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab])
-
-  const matchByIndex = useMemo(() => {
-    const map = new Map()
-    matched.forEach((m, idx) => { map.set(idx, m) })
-    return map
-  }, [matched])
+  useEffect(() => { if (tab === 'cloud') loadCloud() }, [tab])
 
   return (
     <div style={{ maxWidth: 1080, margin: '20px auto', padding: '0 16px', fontFamily: 'system-ui, sans-serif' }}>
       <h2>ReLink MVP (Spotify)</h2>
 
       <div style={{ marginBottom: 12 }}>
-        <button
-          onClick={() => setTab('import')}
-          className="btn"
-          style={{ padding: '6px 10px', marginRight: 8, background: tab==='import'?'#222':'#eee', color: tab==='import'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}
-        >
+        <button onClick={() => setTab('import')} className="btn"
+          style={{ padding: '6px 10px', marginRight: 8, background: tab==='import'?'#222':'#eee', color: tab==='import'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}>
           Import i dopasowanie
         </button>
-        <button
-          onClick={() => setTab('cloud')}
-          className="btn"
-          style={{ padding: '6px 10px', background: tab==='cloud'?'#222':'#eee', color: tab==='cloud'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}
-        >
+        <button onClick={() => setTab('cloud')} className="btn"
+          style={{ padding: '6px 10px', background: tab==='cloud'?'#222':'#eee', color: tab==='cloud'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}>
           Moja chmura
         </button>
       </div>
@@ -191,12 +236,8 @@ export default function Importer({ apiBase }) {
           <div style={{ marginBottom: 10 }}>
             <div style={{ marginBottom: 6 }}>
               <label style={{ fontSize: 12, color: '#666' }}>Nazwa playlisty:</label>
-              <input
-                value={playlistName}
-                onChange={e => setPlaylistName(e.target.value)}
-                style={{ width: 360, padding: 6, marginLeft: 8 }}
-                placeholder="np. Moje importy"
-              />
+              <input value={playlistName} onChange={e => setPlaylistName(e.target.value)}
+                     style={{ width: 360, padding: 6, marginLeft: 8 }} placeholder="np. Moje importy" />
             </div>
 
             <div style={{ display:'flex', gap: 8, alignItems:'center', marginBottom: 6 }}>
@@ -208,8 +249,12 @@ export default function Importer({ apiBase }) {
             </div>
 
             <div style={{ marginTop: 8, marginBottom: 8 }}>
-              <div style={{ fontSize: 12 }}>Minimalny score: {minScore.toFixed(2)}</div>
-              <input type="range" min="0.40" max="0.95" step="0.01" value={minScore} onChange={e=>setMinScore(Number(e.target.value))} style={{ width: 420 }} />
+              <div style={{ fontSize: 12 }}>Minimalny score: {minScore.toFixed(3)}</div>
+              <input type="range" min={0} max={1} step={0.001} value={minScore}
+                     onChange={e=>setMinScore(Number(e.target.value))} style={{ width: 420 }} />
+              <div style={{ fontSize: 11, color:'#666', marginTop: 2 }}>
+                (Próg działa po stronie serwera — im niższy, tym więcej trafień)
+              </div>
             </div>
 
             <div style={{ display:'flex', gap:8, marginTop: 10 }}>
@@ -245,9 +290,9 @@ export default function Importer({ apiBase }) {
                       <td>{f.name}</td>
                       <td>{f.artist || '-'}</td>
                       <td>
-                        {m?.spotifyId ? (
+                        {m?.spotifyUrl ? (
                           <a href={m.spotifyUrl} target="_blank" rel="noreferrer">
-                            {m.name} — {m.artists}
+                            {m.name ? `${m.name} — ${m.artists || ''}` : 'Otwórz w Spotify'}
                           </a>
                         ) : <span style={{ color:'#999' }}>—</span>}
                       </td>
