@@ -1,3 +1,9 @@
-/api/*      https://relink-mvp.onrender.com/api/:splat      200
-/cloud/*    https://relink-mvp.onrender.com/cloud/:splat    200
-/spotify/*  https://relink-mvp.onrender.com/spotify/:splat  200
+# Proxy do backendu (Render) – unikamy CORS
+# KOLEJNOŚĆ MA ZNACZENIE: te reguły muszą być nad catch-all'em!
+
+/api/*     https://relink-mvp.onrender.com/api/:splat       200
+/cloud/*   https://relink-mvp.onrender.com/cloud/:splat     200
+/spotify/* https://relink-mvp.onrender.com/spotify/:splat   200
+
+# SPA fallback dla Vite/React Router – NA SAMYM KOŃCU
+/*        /index.html                                        200
