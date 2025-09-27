@@ -1,37 +1,37 @@
 // server/server.cjs
 require('dotenv').config();
 const express = require('express');
-const fetch = require('node-fetch');
-const cors = require('cors');
-
-const app = express();
-
-// --- CORS: odbijamy dowolny Origin i jawnie dopuszczamy nagłówki ---
-const corsOpts = {
-  origin: (origin, cb) => cb(null, true), // odbij dowolny
-  credentials: true,
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  exposedHeaders: [],
-};
-app.use(cors(corsOpts));
-// preflight dla wszystkich ścieżek
-app.options('*', cors(corsOpts));
-
-app.use(express.json({ limit: '20mb' }));
+// node-fetch v3 jest ESM – ładujemy dynamicznie:
+const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
 
 const {
+  PORT = 5174,
   SPOTIFY_CLIENT_ID,
   SPOTIFY_CLIENT_SECRET,
   SPOTIFY_REFRESH_TOKEN,
   PLAYLIST_NAME = 'ReLink Import',
-  PORT = 5174,
+  // Ustaw na URL Netlify, np. "https://stupendous-marshmallow-e107a7.netlify.app"
+  CORS_ORIGIN,
 } = process.env;
 
-// ====== prosty healthcheck ======
-app.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+const app = express();
 
-// ====== Spotify helpery (token przez refresh_token) ======
+// --- CORS bez tras typu "*" (zgodne z Express 5) ---
+app.use((req, res, next) => {
+  const allowOrigin = CORS_ORIGIN || req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+  res.setHeader('Vary', 'Origin');
+  // Jeśli używasz cookies – ustaw true; dla tokenów w headerze może być false
+  res.setHeader('Access-Control-Allow-Credentials', 'false');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+app.use(express.json({ limit: '20mb' }));
+
+// ====== Spotify token (globalny, z REFRESH TOKEN) ======
 let accessToken = null;
 let tokenExpiresAt = 0;
 
@@ -43,8 +43,7 @@ async function getAccessToken() {
     method: 'POST',
     headers: {
       Authorization:
-        'Basic ' +
-        Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64'),
+        'Basic ' + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64'),
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams({
@@ -54,12 +53,15 @@ async function getAccessToken() {
   });
 
   const json = await res.json();
-  if (!res.ok) throw new Error(`token error: ${res.status} ${JSON.stringify(json)}`);
+  if (!res.ok) {
+    throw new Error(`token error: ${res.status} ${JSON.stringify(json)}`);
+  }
   accessToken = json.access_token;
   tokenExpiresAt = Date.now() + (json.expires_in || 3600) * 1000;
   return accessToken;
 }
 
+// ====== Proste skoring/dopasowanie ======
 function coreTitle(s) {
   return (s || '')
     .toLowerCase()
@@ -71,9 +73,7 @@ function coreTitle(s) {
     .replace(/\s+/g, ' ')
     .trim();
 }
-function normArtist(a) {
-  return (a || '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
+function normArtist(a) { return (a || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
 function jaccard(a, b) {
   const A = new Set(a.split(' '));
   const B = new Set(b.split(' '));
@@ -96,7 +96,6 @@ function scoreCandidate(local, sp) {
   const tSp = coreTitle(sp.name);
   const aLocal = normArtist(local.artist || '');
   const aSp = normArtist((sp.artists || []).map(x => x.name).join(' & '));
-
   const titleScore = jaccard(tLocal, tSp);
   const artistScore = aLocal ? jaccard(aLocal, aSp) : 0.5;
   const durScore = durationScore(local.durationMs, sp.duration_ms);
@@ -115,23 +114,31 @@ async function spotifySearch(q, limit = 5) {
   return json.tracks?.items || [];
 }
 
-// ====== API: dopasowanie ======
+async function getUserId() {
+  const token = await getAccessToken();
+  const res = await fetch('https://api.spotify.com/v1/me', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const j = await res.json();
+  if (!res.ok) throw new Error(`me error: ${res.status} ${JSON.stringify(j)}`);
+  return j.id;
+}
+
+// ====== Routes ======
+app.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
 app.post('/api/match', async (req, res) => {
   try {
-    const { tracks = [], minScore = 0.58 } = req.body;
+    const { tracks = [], minScore = 0.58 } = req.body || {};
     const results = [];
-
     for (const t of tracks) {
       const q = [coreTitle(t.title), t.artist ? ` artist:${t.artist}` : ''].join(' ').trim();
       const items = await spotifySearch(q, 5);
-
-      let best = null;
-      let bestScore = 0;
+      let best = null, bestScore = 0;
       for (const it of items) {
         const s = scoreCandidate(t, it);
         if (s > bestScore) { bestScore = s; best = it; }
       }
-
       if (best && bestScore >= minScore) {
         results.push({
           input: t,
@@ -145,40 +152,26 @@ app.post('/api/match', async (req, res) => {
       } else {
         results.push({ input: t, spotifyId: null, score: Number(bestScore.toFixed(3)) });
       }
-
-      // drobny throttle, by uniknąć 429
-      await new Promise(r => setTimeout(r, 120));
+      await new Promise(r => setTimeout(r, 120)); // proste oddechy anty-429
     }
-
     res.json({ ok: true, results });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
 
-// ====== API: utworzenie playlisty ======
-async function getUserId() {
-  const token = await getAccessToken();
-  const res = await fetch('https://api.spotify.com/v1/me', {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const j = await res.json();
-  if (!res.ok) throw new Error(`me error: ${res.status} ${JSON.stringify(j)}`);
-  return j.id;
-}
-
+// front wysyła: { name, trackUris: ["spotify:track:..."] }
 app.post('/api/playlist', async (req, res) => {
   try {
-    const { name = PLAYLIST_NAME, trackUris = [] } = req.body;
-    if (!Array.isArray(trackUris) || !trackUris.length) {
-      return res.json({ ok: false, error: 'Brak dopasowań do dodania.' });
+    const { name = PLAYLIST_NAME, trackUris = [] } = req.body || {};
+    if (!Array.isArray(trackUris) || trackUris.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Brak trackUris' });
     }
-
     const token = await getAccessToken();
     const userId = await getUserId();
 
     // create playlist
-    let r = await fetch(`https://api.spotify.com/v1/users/${userId}/playlists`, {
+    let r = await fetch(`https://api.spotify.com/v1/users/${encodeURIComponent(userId)}/playlists`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, public: false, description: 'Imported by ReLink' }),
@@ -205,4 +198,8 @@ app.post('/api/playlist', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`API on http://localhost:${PORT}`));
+// --- start ---
+app.listen(PORT, () => {
+  console.log(`API on http://localhost:${PORT}`);
+  console.log('CORS_ORIGIN:', CORS_ORIGIN || '(*)');
+});
