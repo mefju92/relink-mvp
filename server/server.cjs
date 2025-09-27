@@ -214,7 +214,8 @@ app.post('/api/match', async (req, res) => {
     const { tracks = [], minScore = 0.58 } = req.body || {};
     const results = [];
     for (const t of tracks) {
-      const q = [coreTitle(t.title), t.artist ? ` artist:${t.artist}` : ''].join(' ').trim();
+      const artistQ = t.artist ? ` artist:"${t.artist}"` : '';
+      const q = `${coreTitle(t.title)}${artistQ}`.trim();
       const items = await spotifySearch(q, 5);
       let best = null, bestScore = 0;
       for (const it of items) {
@@ -280,6 +281,66 @@ app.post('/api/playlist', async (req, res) => {
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
+
+/* ---------------- CHMURA: Supabase Storage ---------------- */
+const { createClient } = require('@supabase/supabase-js');
+const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+const BUCKET = process.env.SUPABASE_BUCKET || 'music';
+
+// prosty auth na bearerze z Supabase (ten sam token, co masz w froncie)
+async function requireAuth(req, res, next) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!token) return res.status(401).json({ ok: false, error: 'missing token' });
+  const { data, error } = await supa.auth.getUser(token);
+  if (error || !data?.user) return res.status(401).json({ ok: false, error: 'invalid token' });
+  req.user = data.user;
+  next();
+}
+
+// LISTA plików w chmurze
+async function listCloudHandler(req, res) {
+  try {
+    const prefix = `${req.user.id}/`;
+    const { data: entries, error } = await supa.storage.from(BUCKET).list(prefix, { limit: 1000 });
+    if (error) throw error;
+
+    const files = await Promise.all((entries || []).map(async f => {
+      const path = prefix + f.name;
+      const { data: signed } = await supa.storage.from(BUCKET).createSignedUrl(path, 60 * 60);
+      return { name: f.name, size: f.metadata?.size ?? f.size ?? 0, url: signed?.signedUrl };
+    }));
+
+    res.json({ ok: true, files });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+}
+
+// UPLOAD do chmury (multipart/form-data; pole: "files")
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
+
+async function uploadCloudHandler(req, res) {
+  try {
+    const prefix = `${req.user.id}/`;
+    const results = await Promise.all((req.files || []).map(async (file) => {
+      const path = prefix + file.originalname;
+      const { error } = await supa.storage.from(BUCKET).upload(path, file.buffer, {
+        contentType: file.mimetype, upsert: true,
+      });
+      return { name: file.originalname, ok: !error, error: error?.message };
+    }));
+    res.json({ ok: true, files: results });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+}
+
+// Endpoints (i alias zgodny z frontem)
+app.get('/api/cloud/list', requireAuth, listCloudHandler);
+app.get('/cloud/list',     requireAuth, listCloudHandler);  // alias, by działało /cloud/list
+app.post('/api/upload',    requireAuth, upload.array('files', 50), uploadCloudHandler);
+
 
 /* ---------------- start ---------------- */
 app.listen(PORT, () => {
