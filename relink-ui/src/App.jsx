@@ -4,7 +4,9 @@ import AuthLanding from './AuthLanding';
 import Importer from './Importer';
 import AuthCallback from './AuthCallback';
 
-const apiBase = import.meta.env.VITE_API_URL;
+// Używamy reverse-proxy Netlify -> Render.
+// Bazowy URL zostawiamy pusty, dzięki czemu wołamy względnie: "/api/..."
+const apiBase = '';
 
 export default function App() {
   const [session, setSession] = React.useState(null);
@@ -14,9 +16,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<AuthLanding onAuthed={setSession} apiBase={apiBase} />} />
         <Route path="/app" element={<Importer apiBase={apiBase} />} />
-        {/* strona docelowa po kliknięciu w link z maila Supabase */}
         <Route path="/auth/callback" element={<AuthCallback />} />
-        {/* (opcjonalnie) fallback */}
         <Route path="*" element={<AuthLanding onAuthed={setSession} apiBase={apiBase} />} />
       </Routes>
     </BrowserRouter>
