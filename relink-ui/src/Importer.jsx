@@ -1,5 +1,6 @@
+// relink-ui/src/Importer.jsx
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { supabase } from './supabaseClient'   // potrzebne do chmury i playlisty (jeśli chcesz)
+import { supabase } from './supabaseClient'   // potrzebne do pobrania JWT
 
 function bytes(n) {
   if (n == null) return '-'
@@ -50,13 +51,16 @@ export default function Importer({ apiBase }) {
     setFiles(prev => [...prev, ...mapped])
   }
 
+  // ===== Helpers: token + fetch =====
   async function authHeaders() {
     const { data } = await supabase.auth.getSession()
     const token = data.session?.access_token
-    return token ? { Authorization: `Bearer ${token}` } : {}
+    return {
+      Authorization: token ? `Bearer ${token}` : undefined,
+    }
   }
 
-  // ===== Dopasowanie (BEZ Authorization, względny URL) =====
+  // ===== Dopasowanie =====
   async function scanAndMatch() {
     if (!files.length) return alert('Najpierw dodaj pliki.')
     setScanning(true)
@@ -69,15 +73,14 @@ export default function Importer({ apiBase }) {
           durationMs: f.durationMs || 0,
         })),
       }
-
       const res = await fetch(`${apiBase}/api/match`, {
         method: 'POST',
-        mode: 'cors',
-        credentials: 'omit',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(await authHeaders()),
+        },
         body: JSON.stringify(payload),
       })
-
       const data = await safeJson(res)
       if (!data.ok) throw new Error(data.error || 'match failed')
       setMatched(data.results || [])
@@ -111,7 +114,7 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  // ===== Chmura (Supabase) =====
+  // ===== Chmura (upload/lista) =====
   async function uploadToCloud() {
     const indices = [...selectedForCloud]
     if (!indices.length) return alert('Zaznacz pliki do chmury (kolumna „Do chmury”).')
@@ -151,7 +154,10 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  useEffect(() => { if (tab === 'cloud') loadCloud() }, [tab])
+  useEffect(() => {
+    if (tab === 'cloud') loadCloud()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
 
   const matchByIndex = useMemo(() => {
     const map = new Map()
@@ -164,12 +170,18 @@ export default function Importer({ apiBase }) {
       <h2>ReLink MVP (Spotify)</h2>
 
       <div style={{ marginBottom: 12 }}>
-        <button onClick={() => setTab('import')} className="btn"
-          style={{ padding: '6px 10px', marginRight: 8, background: tab==='import'?'#222':'#eee', color: tab==='import'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}>
+        <button
+          onClick={() => setTab('import')}
+          className="btn"
+          style={{ padding: '6px 10px', marginRight: 8, background: tab==='import'?'#222':'#eee', color: tab==='import'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}
+        >
           Import i dopasowanie
         </button>
-        <button onClick={() => setTab('cloud')} className="btn"
-          style={{ padding: '6px 10px', background: tab==='cloud'?'#222':'#eee', color: tab==='cloud'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}>
+        <button
+          onClick={() => setTab('cloud')}
+          className="btn"
+          style={{ padding: '6px 10px', background: tab==='cloud'?'#222':'#eee', color: tab==='cloud'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}
+        >
           Moja chmura
         </button>
       </div>
@@ -179,8 +191,12 @@ export default function Importer({ apiBase }) {
           <div style={{ marginBottom: 10 }}>
             <div style={{ marginBottom: 6 }}>
               <label style={{ fontSize: 12, color: '#666' }}>Nazwa playlisty:</label>
-              <input value={playlistName} onChange={e => setPlaylistName(e.target.value)}
-                style={{ width: 360, padding: 6, marginLeft: 8 }} placeholder="np. Moje importy" />
+              <input
+                value={playlistName}
+                onChange={e => setPlaylistName(e.target.value)}
+                style={{ width: 360, padding: 6, marginLeft: 8 }}
+                placeholder="np. Moje importy"
+              />
             </div>
 
             <div style={{ display:'flex', gap: 8, alignItems:'center', marginBottom: 6 }}>
@@ -280,7 +296,7 @@ export default function Importer({ apiBase }) {
             </thead>
             <tbody>
               {cloudFiles.map((f, idx) => (
-                <tr key={idx} style={{ borderTop:'1px solid '#eee' }}>
+                <tr key={idx} style={{ borderTop:'1px solid #eee' }}>
                   <td>{f.name}</td>
                   <td>{bytes(f.size)}</td>
                   <td>
