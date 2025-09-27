@@ -1,4 +1,4 @@
-// ReLink API (Express 5) — CORS fixed for Express v5
+// ReLink API (Express 5) — CORS fix + /ping + /api/match (client credentials)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -12,16 +12,17 @@ const {
 } = process.env;
 
 // ---- CORS (Express 5) ----
-// Uwaga: w Express 5 nie używamy '*' jako ścieżki — musi być '(.*)'
+// W Express 5 nie używamy '*' w ścieżkach — trzeba '(.*)'
 const allowedOrigins = new Set([
   'http://localhost:5173',
   'http://localhost:5174',
-  'https://stupendous-marshmallow-e107a7.netlify.app', // Twój front na Netlify
+  'https://stupendous-marshmallow-e107a7.netlify.app', // Twój front Netlify
 ]);
 
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // np. curl / ping
+    // bez origin (np. curl) – przepuszczamy
+    if (!origin) return cb(null, true);
     cb(null, allowedOrigins.has(origin));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -32,7 +33,7 @@ const corsOptions = {
 
 const app = express();
 app.use(cors(corsOptions));
-app.options('(.*)', cors(corsOptions)); // <— to wywalało się na '*' w Express 5
+app.options('(.*)', cors(corsOptions)); // UWAGA: '(.*)', nie '*'
 app.use(express.json({ limit: '20mb' }));
 
 // ---- Log startu ----
@@ -48,6 +49,7 @@ app.get('/ping', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ===================================================================
 //                          /api/match (MVP)
+//  Używa tokena aplikacyjnego (client_credentials) do wyszukiwania.
 // ===================================================================
 
 // proste czyszczenie tytułów
@@ -99,7 +101,7 @@ function scoreCandidate(local, sp) {
   return 0.5 * titleScore + 0.35 * artistScore + 0.15 * durScore;
 }
 
-// token aplikacyjny (client_credentials) do wyszukiwania
+// token aplikacyjny (client_credentials)
 let appToken = null;
 let appTokenExp = 0;
 
@@ -117,9 +119,87 @@ async function getAppToken() {
     },
     body: new URLSearchParams({ grant_type: 'client_credentials' }),
   });
+
   const j = await r.json();
-  if (!r.ok) throw new Error(j.error_description || j.error || 'token error');
+  if (!r.ok) throw new Error(j.error_description || j.error || 'spotify token error');
 
   appToken = j.access_token;
   appTokenExp = Date.now() + (j.expires_in || 3600) * 1000;
-  return a
+  return appToken;
+}
+
+async function spotifySearch(q, limit = 5) {
+  const token = await getAppToken();
+  const url = new URL('https://api.spotify.com/v1/search');
+  url.searchParams.set('q', q);
+  url.searchParams.set('type', 'track');
+  url.searchParams.set('limit', String(limit));
+  const r = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(`search ${r.status}: ${JSON.stringify(j)}`);
+  return j.tracks?.items || [];
+}
+
+app.post('/api/match', async (req, res) => {
+  try {
+    const { tracks = [], minScore = 0.58 } = req.body || {};
+    const results = [];
+
+    for (const t of tracks) {
+      const q = [coreTitle(t.title), t.artist ? ` artist:${t.artist}` : '']
+        .join(' ')
+        .trim();
+
+      const items = await spotifySearch(q, 5);
+
+      let best = null;
+      let bestScore = 0;
+      for (const it of items) {
+        const s = scoreCandidate(t, it);
+        if (s > bestScore) {
+          bestScore = s;
+          best = it;
+        }
+      }
+
+      if (best && bestScore >= minScore) {
+        results.push({
+          input: t,
+          spotifyId: best.id,
+          spotifyUrl: best.external_urls?.spotify,
+          name: best.name,
+          artists: best.artists?.map((a) => a.name).join(', '),
+          durationMs: best.duration_ms,
+          score: Number(bestScore.toFixed(3)),
+        });
+      } else {
+        results.push({
+          input: t,
+          spotifyId: null,
+          score: Number(bestScore.toFixed(3)),
+        });
+      }
+
+      // drobny throttle, by nie złapać 429
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    res.json({ ok: true, results });
+  } catch (e) {
+    console.error('match error:', e);
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+// (opcjonalnie) placeholder by „Utwórz playlistę” nie waliło 404.
+// W tej wersji nie tworzymy playlist (wymaga user-tokenu).
+app.post('/api/playlist', (_req, res) => {
+  res.status(501).json({ ok: false, error: 'Playlist not implemented in this build.' });
+});
+
+// ---- Start ----
+app.listen(PORT, () => {
+  console.log(`API on http://localhost:${PORT}`);
+});
