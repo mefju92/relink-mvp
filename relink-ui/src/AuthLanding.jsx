@@ -11,10 +11,10 @@ export default function AuthLanding({ onAuthed, apiBase }) {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) onAuthed(data.session);
+      if (data.session) onAuthed?.(data.session);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) onAuthed(session);
+      if (session) onAuthed?.(session);
     });
     return () => sub.subscription.unsubscribe();
   }, [onAuthed]);
@@ -26,7 +26,6 @@ export default function AuthLanding({ onAuthed, apiBase }) {
       email,
       password: pass,
       options: {
-        // po kliknięciu w link z maila wracamy na /auth/callback (dodałeś to w Supabase)
         emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
@@ -43,14 +42,14 @@ export default function AuthLanding({ onAuthed, apiBase }) {
     if (error) setMsg(`Błąd logowania: ${error.message}`);
     else {
       setMsg('Zalogowano.');
-      // utwórz prywatny folder w storage po zalogowaniu
       const token = data.session?.access_token;
       try {
-        await fetch(`${apiBase}/api/bootstrap`, {
+        const base = getBackendBase(apiBase);
+        await fetch(`${base}/api/bootstrap`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
         });
-      } catch { /* ignore w MVP */ }
+      } catch { /* no-op */ }
     }
   }
 
@@ -59,14 +58,27 @@ export default function AuthLanding({ onAuthed, apiBase }) {
     window.location.reload();
   }
 
-  // >>> TO JEST KLUCZOWE: doklejamy Bearer token do /spotify/login
- async function connectSpotify() {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token || '';
-  const url = `${apiBase}/spotify/login?frontend=${encodeURIComponent(window.location.origin)}&token=${encodeURIComponent(token)}`;
-  window.location.href = url;
-}
+  function getBackendBase(passedBase) {
+    const envBase = (import.meta.env?.VITE_API_URL || '').trim();
+    const hardFallback = 'https://relink-mvp.onrender.com';
+    const chosen = (passedBase || envBase || hardFallback).replace(/\/+$/,'');
+    return chosen;
+  }
 
+  async function connectSpotify() {
+    const backend = getBackendBase(apiBase);
+    if (!/^https?:\/\//i.test(backend)) {
+      alert('Błąd konfiguracji backendu. Sprawdź VITE_API_URL.');
+      return;
+    }
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token || '';
+    const qs = new URLSearchParams({
+      frontend: window.location.origin,
+      token,
+    });
+    window.location.href = `${backend}/spotify/login?${qs.toString()}`;
+  }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-6">
@@ -123,7 +135,7 @@ export default function AuthLanding({ onAuthed, apiBase }) {
             </button>
           </div>
 
-          <div style={{border:'1px solid #eee', padding: 20, borderRadius:12}}>
+          <div style={{border:'1px solid '#eee', padding: 20, borderRadius:12}}>
             <h3 style={{marginTop:0}}>Już zalogowany?</h3>
             <p style={{color:'#555'}}>Przejdź do importu i dopasowania.</p>
             <a href="/app"
