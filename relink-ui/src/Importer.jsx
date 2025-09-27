@@ -203,7 +203,7 @@ export default function Importer({ apiBase }) {
   async function loadCloud() {
     setCloudLoading(true)
     try {
-      const res = await fetch(`${apiBase}/cloud/list`, { headers: { ...(await authHeaders()) } })
+      const res = await fetch(`${apiBase}/api/cloud/list`, { headers: { ...(await authHeaders()) } })
       const data = await safeJson(res)
       if (!data.ok) throw new Error(data.error || 'list failed')
       setCloudFiles(data.files || [])
