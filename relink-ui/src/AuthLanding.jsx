@@ -5,6 +5,11 @@ import { supabase } from './supabaseClient'
 
 function Modal({ text, onClose, ok = false }) {
   return (
+    <div style={{minHeight:'100vh', display:'grid', placeItems:'center', padding:'32px 16px'}}>
+    <div style={{width: 'min(720px, 96vw)'}}>
+
+      {/* >>> TU ZOSTAWIASZ CAŁĄ SWOJĄ OBECNĄ ZAWARTOŚĆ STRONY LOGOWANIA <<< */}
+
     <div
       onClick={onClose}
       style={{
@@ -50,6 +55,8 @@ function Modal({ text, onClose, ok = false }) {
         </button>
       </div>
     </div>
+       </div>
+  </div>
   )
 }
 

@@ -54,7 +54,7 @@ function stripFeat(s = '') {
   )
 }
 
-// parser nazwy pliku „Artist - Title”
+// parser nazwy pliku
 function readTagFromName(name = '') {
   const base = removeNoise(name)
   const seps = [' - ', ' – ', ' — ']
@@ -98,7 +98,6 @@ function cleanArtist(s) {
   return (s || '').replace(/\s*-\s*topic$/i, '').trim()
 }
 
-// === component ===
 export default function Importer({ apiBase }) {
   const [tab, setTab] = useState('import')
   const [playlistName, setPlaylistName] = useState('moja playlista')
@@ -112,20 +111,8 @@ export default function Importer({ apiBase }) {
   const [cloudLoading, setCloudLoading] = useState(false)
   const [cloudFiles, setCloudFiles] = useState([])
 
-  const [loggingOut, setLoggingOut] = useState(false)
-
   const folderInputRef = useRef(null)
   const multiInputRef = useRef(null)
-
-  // --- WYLOGOWANIE ---
-  async function logout() {
-    try {
-      setLoggingOut(true)
-      await supabase.auth.signOut()
-    } finally {
-      window.location.replace('/') // powrót do strony logowania
-    }
-  }
 
   async function handleFiles(fileList) {
     const arr = Array.from(fileList || []).filter(f => /\.(mp3|m4a|wav|flac|aac|ogg)$/i.test(f.name))
@@ -228,167 +215,183 @@ export default function Importer({ apiBase }) {
 
   useEffect(() => { if (tab === 'cloud') loadCloud() }, [tab])
 
+  async function signOut() {
+    try {
+      await supabase.auth.signOut()
+    } finally {
+      window.location.href = '/'
+    }
+  }
+
   return (
-    <div
-      style={{
-        maxWidth: 1080,
-        margin: '0 auto',
-        padding: '24px 16px',
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center'
-      }}
-    >
-      {/* PRZYCISK WYLOGUJ */}
-      <div style={{ alignSelf: 'flex-end', marginBottom: 8 }}>
-        <button onClick={logout} disabled={loggingOut} style={{ padding: '6px 10px' }}>
-          {loggingOut ? 'Wylogowuję…' : 'Wyloguj'}
-        </button>
-      </div>
+    // <<< pełnoekranowe centrowanie (horyzontalnie) >>>
+    <div style={{
+      minHeight: '100vh',
+      display: 'grid',
+      placeItems: 'start center',
+      padding: '32px 16px'
+    }}>
+      {/* karta/konten­er o szerokości max 1080px, zawsze wyśrodkowany */}
+      <div style={{ width: 'min(1080px, 96vw)' }}>
+        {/* górny pasek z tytułem + Wyloguj */}
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>ReLink MVP (Spotify)</h2>
+          <button onClick={signOut} style={{ padding:'6px 10px', border:'1px solid #ccc', borderRadius:6, background:'#fff' }}>
+            Wyloguj
+          </button>
+        </div>
 
-      <h2>ReLink MVP (Spotify)</h2>
+        <div style={{ marginBottom: 12 }}>
+          <button
+            onClick={() => setTab('import')}
+            className="btn"
+            style={{ padding: '6px 10px', marginRight: 8, background: tab==='import'?'#222':'#eee', color: tab==='import'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}
+          >
+            Import i dopasowanie
+          </button>
+          <button
+            onClick={() => setTab('cloud')}
+            className="btn"
+            style={{ padding: '6px 10px', background: tab==='cloud'?'#222':'#eee', color: tab==='cloud'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}
+          >
+            Moja chmura
+          </button>
+        </div>
 
-      <div style={{ marginBottom: 12 }}>
-        <button onClick={() => setTab('import')} className="btn"
-          style={{ padding: '6px 10px', marginRight: 8, background: tab==='import'?'#222':'#eee', color: tab==='import'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}>
-          Import i dopasowanie
-        </button>
-        <button onClick={() => setTab('cloud')} className="btn"
-          style={{ padding: '6px 10px', background: tab==='cloud'?'#222':'#eee', color: tab==='cloud'?'#fff':'#000', border: '1px solid #ccc', borderRadius: 6 }}>
-          Moja chmura
-        </button>
-      </div>
+        {tab === 'import' && (
+          <>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ marginBottom: 6 }}>
+                <label style={{ fontSize: 12, color: '#666' }}>Nazwa playlisty:</label>
+                <input
+                  value={playlistName}
+                  onChange={e => setPlaylistName(e.target.value)}
+                  style={{ width: 360, padding: 6, marginLeft: 8 }}
+                  placeholder="np. Moje importy"
+                />
+              </div>
 
-      {tab === 'import' && (
-        <>
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ marginBottom: 6 }}>
-              <label style={{ fontSize: 12, color: '#666' }}>Nazwa playlisty:</label>
-              <input value={playlistName} onChange={e => setPlaylistName(e.target.value)}
-                     style={{ width: 360, padding: 6, marginLeft: 8 }} placeholder="np. Moje importy" />
-            </div>
+              <div style={{ display:'flex', gap: 8, alignItems:'center', marginBottom: 6 }}>
+                <button onClick={() => folderInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz folder (całość)</button>
+                <input ref={folderInputRef} type="file" style={{ display:'none' }} webkitdirectory="true" directory="true" multiple onChange={e => handleFiles(e.target.files)} />
+                <button onClick={() => multiInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz pliki</button>
+                <input ref={multiInputRef} type="file" style={{ display:'none' }} multiple accept=".mp3,.m4a,.wav,.flac,.aac,.ogg" onChange={e => handleFiles(e.target.files)} />
+                <span style={{ fontSize: 12, color:'#666' }}>Liczba plików: {files.length}</span>
+              </div>
 
-            <div style={{ display:'flex', gap: 8, alignItems:'center', marginBottom: 6 }}>
-              <button onClick={() => folderInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz folder (całość)</button>
-              <input ref={folderInputRef} type="file" style={{ display:'none' }} webkitdirectory="true" directory="true" multiple onChange={e => handleFiles(e.target.files)} />
-              <button onClick={() => multiInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz pliki</button>
-              <input ref={multiInputRef} type="file" style={{ display:'none' }} multiple accept=".mp3,.m4a,.wav,.flac,.aac,.ogg" onChange={e => handleFiles(e.target.files)} />
-              <span style={{ fontSize: 12, color:'#666' }}>Liczba plików: {files.length}</span>
-            </div>
+              <div style={{ marginTop: 8, marginBottom: 8 }}>
+                <div style={{ fontSize: 12 }}>Minimalny score: {minScore.toFixed(3)}</div>
+                <input type="range" min={0} max={1} step={0.001} value={minScore}
+                      onChange={e=>setMinScore(Number(e.target.value))} style={{ width: 420 }} />
+                <div style={{ fontSize: 11, color:'#666', marginTop: 2 }}>
+                  (Próg działa po stronie serwera — im niższy, tym więcej trafień)
+                </div>
+              </div>
 
-            <div style={{ marginTop: 8, marginBottom: 8 }}>
-              <div style={{ fontSize: 12 }}>Minimalny score: {minScore.toFixed(3)}</div>
-              <input type="range" min={0} max={1} step={0.001} value={minScore}
-                     onChange={e=>setMinScore(Number(e.target.value))} style={{ width: 420 }} />
-              <div style={{ fontSize: 11, color:'#666', marginTop: 2 }}>
-                (Próg działa po stronie serwera — im niższy, tym więcej trafień)
+              <div style={{ display:'flex', gap:8, marginTop: 10 }}>
+                <button onClick={scanAndMatch} disabled={scanning || !files.length} style={{ padding:'6px 10px' }}>
+                  {scanning ? 'Dopasowuję…' : 'Skanuj i dopasuj'}
+                </button>
+                <button onClick={createPlaylist} disabled={!matched.some(m=>m.spotifyId)} style={{ padding:'6px 10px' }}>
+                  Utwórz playlistę
+                </button>
+                <button onClick={uploadToCloud} disabled={!selectedForCloud.size} style={{ padding:'6px 10px' }}>
+                  Przenieś do chmury ({selectedForCloud.size})
+                </button>
               </div>
             </div>
 
-            <div style={{ display:'flex', gap:8, marginTop: 10 }}>
-              <button onClick={scanAndMatch} disabled={scanning || !files.length} style={{ padding:'6px 10px' }}>
-                {scanning ? 'Dopasowuję…' : 'Skanuj i dopasuj'}
-              </button>
-              <button onClick={createPlaylist} disabled={!matched.some(m=>m.spotifyId)} style={{ padding:'6px 10px' }}>
-                Utwórz playlistę
-              </button>
-              <button onClick={uploadToCloud} disabled={!selectedForCloud.size} style={{ padding:'6px 10px' }}>
-                Przenieś do chmury ({selectedForCloud.size})
+            <div style={{ marginTop: 12 }}>
+              <table width="100%" cellPadding={6} style={{ borderCollapse:'collapse' }}>
+                <thead style={{ background:'#f5f5f5' }}>
+                  <tr>
+                    <th style={{ textAlign:'right', width: 36 }}>#</th>
+                    <th style={{ textAlign:'left' }}>Plik / Tytuł</th>
+                    <th style={{ textAlign:'left' }}>Artysta</th>
+                    <th style={{ textAlign:'left' }}>Spotify</th>
+                    <th style={{ textAlign:'right' }}>Score</th>
+                    <th style={{ textAlign:'center' }}>Do chmury</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {files.map((f, i) => {
+                    const m = matched[i]
+                    const checked = selectedForCloud.has(i)
+                    return (
+                      <tr key={i} style={{ borderTop:'1px solid #eee' }}>
+                        <td style={{ textAlign:'right', color:'#666' }}>{i + 1}</td>
+                        <td>{f.name}</td>
+                        <td>{f.artist || '-'}</td>
+                        <td>
+                          {m?.spotifyUrl ? (
+                            <a href={m.spotifyUrl} target="_blank" rel="noreferrer">
+                              {m.name ? `${m.name} — ${m.artists || ''}` : 'Otwórz w Spotify'}
+                            </a>
+                          ) : <span style={{ color:'#999' }}>—</span>}
+                        </td>
+                        <td style={{ textAlign:'right' }}>{m?.score != null ? m.score.toFixed(3) : '—'}</td>
+                        <td style={{ textAlign:'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={e => {
+                              setSelectedForCloud(prev => {
+                                const next = new Set(prev)
+                                if (e.target.checked) next.add(i); else next.delete(i)
+                                return next
+                              })
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {!files.length && (
+                    <tr><td colSpan={6} style={{ color:'#777', fontStyle:'italic' }}>Dodaj pliki by rozpocząć.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {tab === 'cloud' && (
+          <div>
+            <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:8 }}>
+              <h3 style={{ margin:0 }}>Moja chmura</h3>
+              <button onClick={loadCloud} disabled={cloudLoading} style={{ padding:'4px 10px' }}>
+                {cloudLoading ? 'Odświeżam…' : 'Odśwież'}
               </button>
             </div>
-          </div>
 
-          <div style={{ marginTop: 12, width: '100%' }}>
             <table width="100%" cellPadding={6} style={{ borderCollapse:'collapse' }}>
               <thead style={{ background:'#f5f5f5' }}>
                 <tr>
-                  <th style={{ textAlign:'right', width: 36 }}>#</th>
-                  <th style={{ textAlign:'left' }}>Plik / Tytuł</th>
-                  <th style={{ textAlign:'left' }}>Artysta</th>
-                  <th style={{ textAlign:'left' }}>Spotify</th>
-                  <th style={{ textAlign:'right' }}>Score</th>
-                  <th style={{ textAlign:'center' }}>Do chmury</th>
+                  <th style={{ textAlign:'left' }}>Nazwa</th>
+                  <th style={{ textAlign:'left' }}>Rozmiar</th>
+                  <th style={{ textAlign:'left' }}>Podgląd / Pobierz</th>
                 </tr>
               </thead>
               <tbody>
-                {files.map((f, i) => {
-                  const m = matched[i]
-                  const checked = selectedForCloud.has(i)
-                  return (
-                    <tr key={i} style={{ borderTop:'1px solid #eee' }}>
-                      <td style={{ textAlign:'right', color:'#666' }}>{i + 1}</td>
-                      <td>{f.name}</td>
-                      <td>{f.artist || '-'}</td>
-                      <td>
-                        {m?.spotifyUrl ? (
-                          <a href={m.spotifyUrl} target="_blank" rel="noreferrer">
-                            {m.name ? `${m.name} — ${m.artists || ''}` : 'Otwórz w Spotify'}
-                          </a>
-                        ) : <span style={{ color:'#999' }}>—</span>}
-                      </td>
-                      <td style={{ textAlign:'right' }}>{m?.score != null ? m.score.toFixed(3) : '—'}</td>
-                      <td style={{ textAlign:'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={e => {
-                            setSelectedForCloud(prev => {
-                              const next = new Set(prev)
-                              if (e.target.checked) next.add(i); else next.delete(i)
-                              return next
-                            })
-                          }}
-                        />
-                      </td>
-                    </tr>
-                  )
-                })}
-                {!files.length && (
-                  <tr><td colSpan={6} style={{ color:'#777', fontStyle:'italic' }}>Dodaj pliki by rozpocząć.</td></tr>
+                {cloudFiles.map((f, idx) => (
+                  <tr key={idx} style={{ borderTop:'1px solid #eee' }}>
+                    <td>{f.name}</td>
+                    <td>{bytes(f.size)}</td>
+                    <td>
+                      <audio src={f.url} controls preload="none" style={{ width: 280 }} />
+                      {' '}
+                      <a href={f.url} download target="_blank" rel="noreferrer">Otwórz</a>
+                    </td>
+                  </tr>
+                ))}
+                {!cloudFiles.length && (
+                  <tr><td colSpan={3} style={{ color:'#777', fontStyle:'italic' }}>Brak plików w chmurze.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
-        </>
-      )}
-
-      {tab === 'cloud' && (
-        <div style={{ width:'100%' }}>
-          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:8 }}>
-            <h3 style={{ margin:0 }}>Moja chmura</h3>
-            <button onClick={loadCloud} disabled={cloudLoading} style={{ padding:'4px 10px' }}>
-              {cloudLoading ? 'Odświeżam…' : 'Odśwież'}
-            </button>
-          </div>
-
-          <table width="100%" cellPadding={6} style={{ borderCollapse:'collapse' }}>
-            <thead style={{ background:'#f5f5f5' }}>
-              <tr>
-                <th style={{ textAlign:'left' }}>Nazwa</th>
-                <th style={{ textAlign:'left' }}>Rozmiar</th>
-                <th style={{ textAlign:'left' }}>Podgląd / Pobierz</th>
-              </tr>
-            </thead>
-            <tbody>
-              {cloudFiles.map((f, idx) => (
-                <tr key={idx} style={{ borderTop:'1px solid #eee' }}>
-                  <td>{f.name}</td>
-                  <td>{bytes(f.size)}</td>
-                  <td>
-                    <audio src={f.url} controls preload="none" style={{ width: 280 }} />
-                    {' '}
-                    <a href={f.url} download target="_blank" rel="noreferrer">Otwórz</a>
-                  </td>
-                </tr>
-              ))}
-              {!cloudFiles.length && (
-                <tr><td colSpan={3} style={{ color:'#777', fontStyle:'italic' }}>Brak plików w chmurze.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
