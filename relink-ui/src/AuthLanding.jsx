@@ -1,221 +1,149 @@
-// relink-ui/src/AuthLanding.jsx
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './supabaseClient'
 
-function Modal({ text, onClose, ok = false }) {
-  return (
-    <div style={{minHeight:'100vh', display:'grid', placeItems:'center', padding:'32px 16px'}}>
-    <div style={{width: 'min(720px, 96vw)'}}>
-
-      {/* >>> TU ZOSTAWIASZ CAŁĄ SWOJĄ OBECNĄ ZAWARTOŚĆ STRONY LOGOWANIA <<< */}
-
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'grid',
-        placeItems: 'center',
-        zIndex: 1000
-      }}
-    >
-      <div
-        role="dialog"
-        aria-live="assertive"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          minWidth: 300,
-          maxWidth: 420,
-          background: '#fff',
-          borderRadius: 12,
-          padding: '18px 20px',
-          boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
-          textAlign: 'center',
-          border: ok ? '2px solid #16a34a' : '2px solid #ef4444'
-        }}
-      >
-        <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 6 }}>
-          {ok ? 'Zalogowany' : 'Błąd logowania'}
-        </div>
-        <div style={{ color: '#444', marginBottom: 14 }}>{text}</div>
-        <button
-          autoFocus
-          onClick={onClose}
-          style={{
-            padding: '8px 14px',
-            borderRadius: 8,
-            border: '1px solid #ddd',
-            background: '#111',
-            color: '#fff'
-          }}
-        >
-          OK
-        </button>
-      </div>
-    </div>
-       </div>
-  </div>
-  )
-}
-
-export default function AuthLanding({ onAuthed, apiBase }) {
+export default function AuthLanding() {
   const nav = useNavigate()
-  const [tab, setTab] = useState('login')
+  const [mode, setMode] = useState('login') // 'login' | 'register'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [modal, setModal] = useState(null) // { text, ok }
+  const [toast, setToast] = useState(null) // {type:'ok'|'err', msg:string}
 
-  // jeśli user już zalogowany -> od razu do importera
+  // jeśli ktoś już zalogowany -> nie przenosimy automatycznie, zostajemy na logowaniu
   useEffect(() => {
-    (async () => {
-      const { data } = await supabase.auth.getSession()
-      if (data?.session) {
-        onAuthed?.(data.session)
-        nav('/app', { replace: true })
-      }
-    })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    supabase.auth.getSession().then(({ data }) => {
+      /* no-op – zostawiamy stronę logowania na ekranie */
+    })
   }, [])
 
-  async function handleLogin(e) {
-    e.preventDefault()
-    setLoading(true)
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error || !data?.session) {
-        setModal({ text: 'Nieprawidłowy e-mail lub hasło.', ok: false })
-        return
-      }
-      onAuthed?.(data.session)
-      setModal({ text: 'Zalogowano pomyślnie. Przekierowuję…', ok: true })
-      setTimeout(() => nav('/app', { replace: true }), 900)
-    } finally {
-      setLoading(false)
-    }
+  function showToast(type, msg) {
+    setToast({ type, msg })
+    setTimeout(() => setToast(null), 1400)
   }
 
-  // prosta rejestracja (opcjonalnie)
-  async function handleRegister(e) {
+  async function onSubmit(e) {
     e.preventDefault()
-    if (!email || !password) return
     setLoading(true)
     try {
-      const { error } = await supabase.auth.signUp({ email, password })
-      if (error) {
-        setModal({ text: error.message || 'Nie udało się utworzyć konta.', ok: false })
+      if (mode === 'login') {
+        const { error } = await supabase.auth.signInWithPassword({ email, password })
+        if (error) throw error
+        showToast('ok', 'Zalogowano')
+        setTimeout(() => nav('/app'), 700)
       } else {
-        setModal({
-          text: 'Konto utworzone. Sprawdź e-mail (potwierdzenie), a potem zaloguj się.',
-          ok: true
-        })
-        setTab('login')
+        const { error } = await supabase.auth.signUp({ email, password })
+        if (error) throw error
+        showToast('ok', 'Sprawdź e-mail, aby potwierdzić')
       }
+    } catch (err) {
+      showToast('err', 'Nieprawidłowy e-mail lub hasło')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        placeItems: 'center',
-        fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif',
-        padding: '24px 16px'
-      }}
-    >
-      <div style={{ width: '100%', maxWidth: 960 }}>
-        {/* Nagłówek wyśrodkowany */}
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <h1 style={{ margin: 0, fontSize: 38 }}>
-            Odtwórz z nami swoją dawną playlistę
-          </h1>
-          <p style={{ marginTop: 8, color: '#555' }}>
-            Dopasujemy Twoje lokalne pliki do Spotify, stworzymy playlistę i zachowamy resztę w Twojej prywatnej chmurze.
-          </p>
+    <div style={{
+      minHeight: '100svh',
+      display: 'grid',
+      placeItems: 'center',
+      padding: '24px',
+      fontFamily: 'system-ui, sans-serif'
+    }}>
+      {/* karta logowania w centrum */}
+      <div style={{
+        width: 'min(520px, 92vw)',
+        background: '#fff',
+        border: '1px solid #e5e7eb',
+        borderRadius: 12,
+        padding: 20,
+        boxShadow: '0 6px 24px rgba(0,0,0,0.06)'
+      }}>
+        <h1 style={{ margin: '0 0 6px', textAlign: 'center' }}>
+          Odtwórz z nami swoją dawną playlistę
+        </h1>
+        <p style={{ margin: '0 0 16px', textAlign: 'center', color: '#666' }}>
+          Dopasujemy Twoje lokalne pliki do Spotify i zachowamy resztę w Twojej prywatnej chmurze.
+        </p>
+
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <button
+            onClick={() => setMode('login')}
+            style={{
+              flex: 1, padding: '8px 10px', borderRadius: 8,
+              border: '1px solid #d1d5db',
+              background: mode === 'login' ? '#111' : '#f5f5f5',
+              color: mode === 'login' ? '#fff' : '#111'
+            }}>
+            Logowanie
+          </button>
+          <button
+            onClick={() => setMode('register')}
+            style={{
+              flex: 1, padding: '8px 10px', borderRadius: 8,
+              border: '1px solid #d1d5db',
+              background: mode === 'register' ? '#111' : '#f5f5f5',
+              color: mode === 'register' ? '#fff' : '#111'
+            }}>
+            Rejestracja
+          </button>
         </div>
 
-        {/* Jedna kolumna – wyłącznie formularz logowania/rejestracji */}
-        <div
-          style={{
-            maxWidth: 440,
-            margin: '0 auto',
-            border: '1px solid #e5e7eb',
-            borderRadius: 12,
-            padding: 16
-          }}
-        >
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-            <button
-              onClick={() => setTab('login')}
-              style={{
-                padding: '6px 10px',
-                borderRadius: 8,
-                border: '1px solid #d1d5db',
-                background: tab === 'login' ? '#111' : '#f3f4f6',
-                color: tab === 'login' ? '#fff' : '#111',
-                flex: 1
-              }}
-            >
-              Logowanie
-            </button>
-            <button
-              onClick={() => setTab('register')}
-              style={{
-                padding: '6px 10px',
-                borderRadius: 8,
-                border: '1px solid #d1d5db',
-                background: tab === 'register' ? '#111' : '#f3f4f6',
-                color: tab === 'register' ? '#fff' : '#111',
-                flex: 1
-              }}
-            >
-              Rejestracja
-            </button>
-          </div>
-
-          <form onSubmit={tab === 'login' ? handleLogin : handleRegister}>
-            <label style={{ display: 'block', fontSize: 12, color: '#666' }}>E-mail</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              style={{ width: '100%', padding: 10, marginBottom: 8 }}
-            />
-            <label style={{ display: 'block', fontSize: 12, color: '#666' }}>Hasło</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              style={{ width: '100%', padding: 10, marginBottom: 12 }}
-            />
-
-            <button
-              type="submit"
-              disabled={loading}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                borderRadius: 8,
-                border: '1px solid #111',
-                background: '#111',
-                color: '#fff',
-                fontWeight: 600
-              }}
-            >
-              {tab === 'login' ? (loading ? 'Loguję…' : 'Zaloguj się') : (loading ? 'Rejestruję…' : 'Utwórz konto')}
-            </button>
-          </form>
-        </div>
+        <form onSubmit={onSubmit}>
+          <input
+            type="email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            placeholder="E-mail"
+            required
+            style={{
+              width: '100%', padding: 10, borderRadius: 8,
+              border: '1px solid #d1d5db', marginBottom: 8
+            }}
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            placeholder="Hasło"
+            required
+            style={{
+              width: '100%', padding: 10, borderRadius: 8,
+              border: '1px solid #d1d5db', marginBottom: 12
+            }}
+          />
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              width: '100%', padding: '10px 12px', borderRadius: 8,
+              background: '#111', color: '#fff', border: '1px solid #111',
+              opacity: loading ? 0.7 : 1
+            }}>
+            {loading ? 'Przetwarzam…' : (mode === 'login' ? 'Zaloguj się' : 'Zarejestruj się')}
+          </button>
+        </form>
       </div>
 
-      {modal && <Modal text={modal.text} ok={modal.ok} onClose={() => setModal(null)} />}
+      {/* mini-toast (półprzezroczyste tło + kartka na środku) */}
+      {toast && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
+          display: 'grid', placeItems: 'center', zIndex: 50
+        }}>
+          <div style={{
+            background: '#fff', padding: '16px 20px', borderRadius: 12,
+            minWidth: 240, textAlign: 'center',
+            border: `1px solid ${toast.type === 'ok' ? '#16a34a' : '#ef4444'}`
+          }}>
+            <b style={{ color: toast.type === 'ok' ? '#16a34a' : '#ef4444' }}>
+              {toast.type === 'ok' ? 'Zalogowany' : 'Błąd'}
+            </b>
+            <div style={{ marginTop: 6 }}>{toast.msg}</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
