@@ -229,6 +229,12 @@ export default function Importer({ apiBase }) {
     nav('/')
   }
 
+  // NOWE: połącz Spotify (wróci na /app po autoryzacji)
+  function connectSpotify() {
+    const frontend = window.location.origin
+    window.location.href = `${apiBase}/spotify/login?frontend=${encodeURIComponent(frontend)}`
+  }
+
   return (
     <div style={{
       minHeight: '100svh',
@@ -246,11 +252,18 @@ export default function Importer({ apiBase }) {
         padding: 16,
         boxShadow: '0 6px 24px rgba(0,0,0,0.06)'
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
           <h2 style={{ margin: 8 }}>ReLink MVP (Spotify)</h2>
-          <button onClick={logout} style={{ padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 8, background: '#f5f5f5' }}>
-            Wyloguj
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={connectSpotify} title="Połącz konto Spotify"
+              style={{ padding: '6px 10px', border: '1px solid #1DB954', background: '#1DB954', color: '#fff', borderRadius: 8 }}>
+              Spotify
+            </button>
+            <button onClick={logout}
+              style={{ padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 8, background: '#f5f5f5' }}>
+              Wyloguj
+            </button>
+          </div>
         </div>
 
         <div style={{ marginBottom: 12 }}>
