@@ -38,8 +38,8 @@ const NOISE_PATTERNS = [
 // usuń dopiski + nawiasy [] () {}
 function removeNoise(str = '') {
   let x = str
-  x = x.replace(/\.(mp3|m4a|wav|flac|aac|ogg)$/i, '')    // rozszerzenie
-  x = x.replace(/[_·•]+/g, ' ')                          // separatory
+  x = x.replace(/\.(mp3|m4a|wav|flac|aac|ogg)$/i, '')
+  x = x.replace(/[_·•]+/g, ' ')
   x = x.replace(/\s*[\[\(\{](?:https?:\/\/|www\.)?.*?[\]\)\}]\s*/g, ' ')
   for (const re of NOISE_PATTERNS) x = x.replace(re, ' ')
   return cleanWhitespace(x)
@@ -54,7 +54,7 @@ function stripFeat(s = '') {
   )
 }
 
-// *** WŁAŚCIWA wersja parsera nazwy pliku ***
+// parser nazwy pliku -> { artist, title }
 function readTagFromName(name = '') {
   const base = removeNoise(name)
   const seps = [' - ', ' – ', ' — ']
@@ -68,7 +68,7 @@ function readTagFromName(name = '') {
   return { artist: '', title: stripFeat(base) }
 }
 
-// zmierz długość utworu
+// długość utworu
 function measureDurationMs(file) {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file)
@@ -84,7 +84,7 @@ function measureDurationMs(file) {
   })
 }
 
-// delikatne czyszczenie tytułów/artystów (payload -> /api/match)
+// czyszczenie dla match
 const CLEAN_PARENS_RX = /\s*\((?:official|music\s*video|video|audio|lyrics?|original\s*mix|extended\s*mix|radio\s*edit|remaster(?:ed)?(?:\s*\d{4})?|copy.*)\)\s*$/gi
 const CLEAN_COPY_RX = /-\s*copy(\s*\(\d+\))?/gi
 function cleanTitle(s) {
@@ -98,7 +98,6 @@ function cleanArtist(s) {
   return (s || '').replace(/\s*-\s*topic$/i, '').trim()
 }
 
-// === component ===
 export default function Importer({ apiBase }) {
   const [tab, setTab] = useState('import')
   const [playlistName, setPlaylistName] = useState('moja playlista')
@@ -131,7 +130,6 @@ export default function Importer({ apiBase }) {
     return token ? { Authorization: `Bearer ${token}` } : {}
   }
 
-  // dopasowanie
   async function scanAndMatch() {
     if (!files.length) return alert('Najpierw dodaj pliki.')
     setScanning(true)
@@ -159,7 +157,6 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  // playlisty
   async function createPlaylist() {
     const ok = matched.filter(m => m.spotifyId)
     if (!ok.length) return alert('Brak dopasowań do dodania.')
@@ -179,7 +176,6 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  // chmura
   async function uploadToCloud() {
     const indices = [...selectedForCloud]
     if (!indices.length) return alert('Zaznacz pliki do chmury (kolumna „Do chmury”).')
@@ -217,7 +213,17 @@ export default function Importer({ apiBase }) {
   useEffect(() => { if (tab === 'cloud') loadCloud() }, [tab])
 
   return (
-    <div style={{ maxWidth: 1080, margin: '20px auto', padding: '0 16px', fontFamily: 'system-ui, sans-serif' }}>
+    <div
+      style={{
+        maxWidth: 1080,
+        margin: '0 auto',
+        padding: '24px 16px',
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center'
+      }}
+    >
       <h2>ReLink MVP (Spotify)</h2>
 
       <div style={{ marginBottom: 12 }}>
@@ -233,7 +239,7 @@ export default function Importer({ apiBase }) {
 
       {tab === 'import' && (
         <>
-          <div style={{ marginBottom: 10 }}>
+          <div style={{ marginBottom: 10, width: '100%', maxWidth: 920 }}>
             <div style={{ marginBottom: 6 }}>
               <label style={{ fontSize: 12, color: '#666' }}>Nazwa playlisty:</label>
               <input value={playlistName} onChange={e => setPlaylistName(e.target.value)}
@@ -270,10 +276,12 @@ export default function Importer({ apiBase }) {
             </div>
           </div>
 
-          <div style={{ marginTop: 12 }}>
+          {/* LISTA IMPORTU — z numeracją */}
+          <div style={{ marginTop: 12, width: '100%', maxWidth: 920 }}>
             <table width="100%" cellPadding={6} style={{ borderCollapse:'collapse' }}>
               <thead style={{ background:'#f5f5f5' }}>
                 <tr>
+                  <th style={{ textAlign:'right', width: 36 }}>#</th>
                   <th style={{ textAlign:'left' }}>Plik / Tytuł</th>
                   <th style={{ textAlign:'left' }}>Artysta</th>
                   <th style={{ textAlign:'left' }}>Spotify</th>
@@ -287,6 +295,7 @@ export default function Importer({ apiBase }) {
                   const checked = selectedForCloud.has(i)
                   return (
                     <tr key={i} style={{ borderTop:'1px solid #eee' }}>
+                      <td style={{ textAlign:'right', color:'#666' }}>{i + 1}</td>
                       <td>{f.name}</td>
                       <td>{f.artist || '-'}</td>
                       <td>
@@ -314,7 +323,7 @@ export default function Importer({ apiBase }) {
                   )
                 })}
                 {!files.length && (
-                  <tr><td colSpan={5} style={{ color:'#777', fontStyle:'italic' }}>Dodaj pliki by rozpocząć.</td></tr>
+                  <tr><td colSpan={6} style={{ color:'#777', fontStyle:'italic' }}>Dodaj pliki by rozpocząć.</td></tr>
                 )}
               </tbody>
             </table>
@@ -323,7 +332,7 @@ export default function Importer({ apiBase }) {
       )}
 
       {tab === 'cloud' && (
-        <div>
+        <div style={{ width: '100%', maxWidth: 920 }}>
           <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:8 }}>
             <h3 style={{ margin:0 }}>Moja chmura</h3>
             <button onClick={loadCloud} disabled={cloudLoading} style={{ padding:'4px 10px' }}>
