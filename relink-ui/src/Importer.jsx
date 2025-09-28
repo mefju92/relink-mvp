@@ -38,8 +38,8 @@ const NOISE_PATTERNS = [
 // usuń dopiski + nawiasy [] () {}
 function removeNoise(str = '') {
   let x = str
-  x = x.replace(/\.(mp3|m4a|wav|flac|aac|ogg)$/i, '')
-  x = x.replace(/[_·•]+/g, ' ')
+  x = x.replace(/\.(mp3|m4a|wav|flac|aac|ogg)$/i, '')    // rozszerzenie
+  x = x.replace(/[_·•]+/g, ' ')                          // separatory
   x = x.replace(/\s*[\[\(\{](?:https?:\/\/|www\.)?.*?[\]\)\}]\s*/g, ' ')
   for (const re of NOISE_PATTERNS) x = x.replace(re, ' ')
   return cleanWhitespace(x)
@@ -54,7 +54,7 @@ function stripFeat(s = '') {
   )
 }
 
-// parser nazwy pliku -> { artist, title }
+// parser nazwy pliku „Artist - Title”
 function readTagFromName(name = '') {
   const base = removeNoise(name)
   const seps = [' - ', ' – ', ' — ']
@@ -68,7 +68,7 @@ function readTagFromName(name = '') {
   return { artist: '', title: stripFeat(base) }
 }
 
-// długość utworu
+// zmierz długość utworu
 function measureDurationMs(file) {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file)
@@ -84,7 +84,7 @@ function measureDurationMs(file) {
   })
 }
 
-// czyszczenie dla match
+// delikatne czyszczenie tytułów/artystów (payload -> /api/match)
 const CLEAN_PARENS_RX = /\s*\((?:official|music\s*video|video|audio|lyrics?|original\s*mix|extended\s*mix|radio\s*edit|remaster(?:ed)?(?:\s*\d{4})?|copy.*)\)\s*$/gi
 const CLEAN_COPY_RX = /-\s*copy(\s*\(\d+\))?/gi
 function cleanTitle(s) {
@@ -98,6 +98,7 @@ function cleanArtist(s) {
   return (s || '').replace(/\s*-\s*topic$/i, '').trim()
 }
 
+// === component ===
 export default function Importer({ apiBase }) {
   const [tab, setTab] = useState('import')
   const [playlistName, setPlaylistName] = useState('moja playlista')
@@ -111,8 +112,20 @@ export default function Importer({ apiBase }) {
   const [cloudLoading, setCloudLoading] = useState(false)
   const [cloudFiles, setCloudFiles] = useState([])
 
+  const [loggingOut, setLoggingOut] = useState(false)
+
   const folderInputRef = useRef(null)
   const multiInputRef = useRef(null)
+
+  // --- WYLOGOWANIE ---
+  async function logout() {
+    try {
+      setLoggingOut(true)
+      await supabase.auth.signOut()
+    } finally {
+      window.location.replace('/') // powrót do strony logowania
+    }
+  }
 
   async function handleFiles(fileList) {
     const arr = Array.from(fileList || []).filter(f => /\.(mp3|m4a|wav|flac|aac|ogg)$/i.test(f.name))
@@ -130,6 +143,7 @@ export default function Importer({ apiBase }) {
     return token ? { Authorization: `Bearer ${token}` } : {}
   }
 
+  // dopasowanie
   async function scanAndMatch() {
     if (!files.length) return alert('Najpierw dodaj pliki.')
     setScanning(true)
@@ -157,6 +171,7 @@ export default function Importer({ apiBase }) {
     }
   }
 
+  // playlisty
   async function createPlaylist() {
     const ok = matched.filter(m => m.spotifyId)
     if (!ok.length) return alert('Brak dopasowań do dodania.')
@@ -176,6 +191,7 @@ export default function Importer({ apiBase }) {
     }
   }
 
+  // chmura
   async function uploadToCloud() {
     const indices = [...selectedForCloud]
     if (!indices.length) return alert('Zaznacz pliki do chmury (kolumna „Do chmury”).')
@@ -224,6 +240,13 @@ export default function Importer({ apiBase }) {
         alignItems: 'center'
       }}
     >
+      {/* PRZYCISK WYLOGUJ */}
+      <div style={{ alignSelf: 'flex-end', marginBottom: 8 }}>
+        <button onClick={logout} disabled={loggingOut} style={{ padding: '6px 10px' }}>
+          {loggingOut ? 'Wylogowuję…' : 'Wyloguj'}
+        </button>
+      </div>
+
       <h2>ReLink MVP (Spotify)</h2>
 
       <div style={{ marginBottom: 12 }}>
@@ -239,7 +262,7 @@ export default function Importer({ apiBase }) {
 
       {tab === 'import' && (
         <>
-          <div style={{ marginBottom: 10, width: '100%', maxWidth: 920 }}>
+          <div style={{ marginBottom: 10 }}>
             <div style={{ marginBottom: 6 }}>
               <label style={{ fontSize: 12, color: '#666' }}>Nazwa playlisty:</label>
               <input value={playlistName} onChange={e => setPlaylistName(e.target.value)}
@@ -276,8 +299,7 @@ export default function Importer({ apiBase }) {
             </div>
           </div>
 
-          {/* LISTA IMPORTU — z numeracją */}
-          <div style={{ marginTop: 12, width: '100%', maxWidth: 920 }}>
+          <div style={{ marginTop: 12, width: '100%' }}>
             <table width="100%" cellPadding={6} style={{ borderCollapse:'collapse' }}>
               <thead style={{ background:'#f5f5f5' }}>
                 <tr>
@@ -332,7 +354,7 @@ export default function Importer({ apiBase }) {
       )}
 
       {tab === 'cloud' && (
-        <div style={{ width: '100%', maxWidth: 920 }}>
+        <div style={{ width:'100%' }}>
           <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:8 }}>
             <h3 style={{ margin:0 }}>Moja chmura</h3>
             <button onClick={loadCloud} disabled={cloudLoading} style={{ padding:'4px 10px' }}>

@@ -1,0 +1,4 @@
+[build]
+  base = "relink-ui"
+  command = "npm ci && npm run build"
+  publish = "dist"
