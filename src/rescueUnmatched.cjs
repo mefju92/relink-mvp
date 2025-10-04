@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* src/rescueUnmatched.cjs — ratowanie słabych dopasowań (wersja rozszerzona) */
+/* src/rescueUnmatched.cjs — ratowanie słabych dopasowań (wersja ulepszona) */
 const fs = require('fs');
 const path = require('path');
 const minimist = require('minimist');
@@ -16,12 +16,12 @@ function norm(s) {
   if (!s) return '';
   return stripDiacritics(String(s))
     .replace(/[–—]/g, '-')
-    .replace(/[’]/g, "'")
+    .replace(/[']/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-// Wytnij marketing/śmieci: (Official Video), [HD], - Radio Edit, - Extended Mix, "out now", "copy (1)" itd.
+// ULEPSZONE: Wytnij marketing/śmieci + obsługa Copy (1)
 function coreTitle(raw) {
   if (!raw) return '';
   let s = norm(raw);
@@ -41,8 +41,12 @@ function coreTitle(raw) {
   // końcowe [HD]/[Official] itp.
   s = s.replace(/\s*\[(?:hd|hq|official|lyrics?|audio|video|music video|mv)\]\s*$/i, '');
 
-  // pojedyncze „official/out now” na końcu
+  // pojedyncze „official/out now" na końcu
   s = s.replace(/\b(official|out now)\s*$/i, '');
+  
+  // NOWE: Usuń Copy (1), Copy (2) itp.
+  s = s.replace(/\s*-?\s*copy\s*\(\d+\)\s*$/i, '');
+  s = s.replace(/\s*\(\s*copy\s*\d*\s*\)/gi, '');
 
   // sprzątanie
   s = s.replace(/\s{2,}/g, ' ').replace(/\s*-\s*$/, '');
@@ -50,42 +54,81 @@ function coreTitle(raw) {
   return s.trim();
 }
 
-/* === Składanie zapytań do wyszukiwania === */
+// NOWE: Rozdzielanie artystów
+function splitArtists(artistRaw) {
+  if (!artistRaw) return [];
+  const normalized = norm(artistRaw);
+  return normalized
+    .split(/\s*(?:,|&|x|vs\.?|versus|feat\.?|ft\.?|featuring|with)\s*/i)
+    .map(a => a.trim())
+    .filter(Boolean);
+}
+
+// NOWE: Overlap artystów
+function artistOverlap(localArtists, spotifyArtists) {
+  const localTokens = localArtists;
+  const spotifyTokens = (spotifyArtists || []).map(a => norm(a.name));
+  
+  if (localTokens.length === 0) return 0;
+  
+  let matches = 0;
+  for (const local of localTokens) {
+    for (const spotify of spotifyTokens) {
+      const sim = stringSimilarity.compareTwoStrings(local.toLowerCase(), spotify.toLowerCase());
+      if (sim > 0.6) {
+        matches++;
+        break;
+      }
+    }
+  }
+  
+  return localTokens.length > 0 ? matches / localTokens.length : 0;
+}
+
+/* === ULEPSZONE: Składanie zapytań do wyszukiwania === */
 function buildQueries(artistRaw, titleRaw) {
-  const a = norm(artistRaw);
+  const artists = splitArtists(artistRaw);
   const t = norm(titleRaw);
   const tCore = coreTitle(t);
 
-  // wersje bez „feat …” w tytule
+  // wersje bez „feat …" w tytule
   const tNoFeat = tCore.replace(/\bfeat\.?.*$/i, '').trim();
+  
+  // wykryj remix/edit
+  const hasRemix = /\b(remix|edit|mix)\b/i.test(tCore);
+  const tNoRemix = tCore.replace(/\b(remix|edit|mix|bootleg|mashup|vip)\b/gi, '').trim();
 
-  // zestaw bogatych wariantów
-  const variants = [
-    `${a} ${tCore}`,
-    `${a} ${tNoFeat}`,
-    `${tCore}`,
-    `${tNoFeat}`,
-
-    // cudzysłowy pomagają przy długich tytułach
-    `"${tCore}" ${a}`,
-    `"${tNoFeat}" ${a}`,
-    `"${tCore}"`,
-    `"${tNoFeat}"`,
-
-    // forma „artist - title”
-    `${a} - ${tCore}`,
-    `${a} - ${tNoFeat}`,
-
-    // kwalifikatory pól
-    `track:"${tCore}" artist:"${a}"`,
-    `track:"${tNoFeat}" artist:"${a}"`,
-  ];
+  const variants = [];
+  
+  // Z głównym artystą
+  if (artists.length > 0 && tCore) {
+    variants.push(`${artists[0]} ${tCore}`);
+    variants.push(`${artists[0]} ${tNoFeat}`);
+    variants.push(`track:"${tCore}" artist:"${artists[0]}"`);
+  }
+  
+  // Z wieloma artystami
+  if (artists.length > 1 && tCore) {
+    variants.push(`${artists[0]} ${artists[1]} ${tCore}`);
+    variants.push(`artist:"${artists[0]}" artist:"${artists[1]}" track:"${tCore}"`);
+  }
+  
+  // Samo tytuł (gdy artysta może być błędny)
+  if (tCore) {
+    variants.push(`${tCore}`);
+    variants.push(`"${tCore}"`);
+  }
+  
+  // Wariant bez remix/edit
+  if (hasRemix && tNoRemix && artists.length > 0) {
+    variants.push(`${artists[0]} ${tNoRemix}`);
+  }
 
   return _.uniq(
     variants
       .map((q) => q.replace(/\s{2,}/g, ' ').trim())
       .filter(Boolean)
-  );
+  ).slice(0, 8); // max 8 zapytań
 }
 
 /* === Scoring kandydatów === */
@@ -94,16 +137,6 @@ function similarity(a, b) {
   b = coreTitle(b);
   if (!a || !b) return 0;
   return stringSimilarity.compareTwoStrings(a.toLowerCase(), b.toLowerCase());
-}
-
-function artistScore(localArtist, spotifyArtists) {
-  const local = norm(localArtist);
-  const spNames = (spotifyArtists || []).map((x) => norm(x.name));
-  if (!local || spNames.length === 0) return 0;
-  const best = Math.max(
-    ...spNames.map((sp) => stringSimilarity.compareTwoStrings(local.toLowerCase(), sp.toLowerCase()))
-  );
-  return isFinite(best) ? best : 0;
 }
 
 function durationPenalty(localMs, spotifyMs, soft = 2500, hard = 8000) {
@@ -116,9 +149,9 @@ function durationPenalty(localMs, spotifyMs, soft = 2500, hard = 8000) {
 }
 
 function compositeScore(local, sp, opts = {}) {
-  const { localArtist, localTitle, localDurMs } = local;
+  const { localArtists, localTitle, localDurMs } = local;
   const titleSim = similarity(localTitle, sp.name);
-  const artSim = artistScore(localArtist, sp.artists || []);
+  const artOverlap = artistOverlap(localArtists, sp.artists || []);
   const pen = durationPenalty(localDurMs, sp.duration_ms, opts.softMs ?? 2500, opts.hardMs ?? 8000);
 
   // Boost za bardzo bliski czas
@@ -126,8 +159,14 @@ function compositeScore(local, sp, opts = {}) {
   const closeDurBoost =
     durDiff <= (opts.tightMs ?? 2000) ? 0.15 : durDiff <= (opts.looseMs ?? 5000) ? 0.07 : 0;
 
-  let base = 0.6 * titleSim + 0.4 * artSim;
-  base = Math.max(0, Math.min(1, base - pen + closeDurBoost));
+  // NOWE: Bonus za dopasowanie remix
+  const localHasRemix = /\b(remix|edit)\b/i.test(localTitle);
+  const spHasRemix = /\b(remix|edit)\b/i.test(sp.name);
+  const remixBonus = (localHasRemix && spHasRemix) ? 0.05 : 0;
+
+  // WAGI: 50% tytuł, 40% artysta, reszta = penalties/bonuses
+  let base = 0.50 * titleSim + 0.40 * artOverlap;
+  base = Math.max(0, Math.min(1, base - pen + closeDurBoost + remixBonus));
   return base;
 }
 
@@ -160,7 +199,7 @@ async function main() {
     default: {
       in: 'export/matches.csv',
       out: 'export/matches_rescued.csv',
-      minScore: 0.55,
+      minScore: 0.50,
       limit: 15,    // spróbuj więcej kandydatów
       durMs: 5000,  // tolerancja czasu (soft)
     },
@@ -195,7 +234,8 @@ async function main() {
       continue;
     }
 
-    const localArtist = norm(r.artist || '');
+    const localArtist = r.artist || '';
+    const localArtists = splitArtists(localArtist);
     const localTitle = norm(r.title || '');
     const localDurMs = Number(r.duration_ms || 0);
 
@@ -220,7 +260,7 @@ async function main() {
           const items = res?.body?.tracks?.items || [];
           for (const sp of items) {
             const candScore = compositeScore(
-              { localArtist, localTitle, localDurMs },
+              { localArtists, localTitle, localDurMs },
               sp,
               { softMs: DUR_SOFT, hardMs: DUR_HARD, tightMs: 2000, looseMs: 5000 }
             );

@@ -85,10 +85,14 @@ async function getSpotifyMe(accessToken) {
   return j;
 }
 
+// ========== ULEPSZONE FUNKCJE NORMALIZACJI ==========
+
 function coreTitle(s) {
-  return (s || '')
+  if (!s) return '';
+  
+  let cleaned = (s || '')
     .toLowerCase()
-    // Usuń TYLKO oczywisty szum, ZOSTAW: remix, edit, feat, live
+    // Usuń TYLKO oczywisty szum
     .replace(/\b(out\s*now)\b/gi, '')
     .replace(/\[\s*out\s*now\s*\]/gi, '')
     .replace(/\bofficial\s+(?:music\s+)?video\b/gi, '')
@@ -98,16 +102,53 @@ function coreTitle(s) {
     .replace(/\blyric\s+video\b/gi, '')
     .replace(/\(\d{4}\)/g, '') // usuń rok w nawiasach
     .replace(/\d{3,4}p/gi, '') // usuń 1080p, 720p
-    // Usuń TYLKO puste nawiasy, zostaw te z treścią
+    // Usuń "Copy (1)", "Copy (2)" itp.
+    .replace(/\s*-?\s*copy\s*\(\d+\)\s*$/i, '')
+    .replace(/\s*\(\s*copy\s*\d*\s*\)/gi, '')
+    // Usuń TYLKO puste nawiasy
     .replace(/\(\s*\)/g, '')
     .replace(/\[\s*\]/g, '')
     .replace(/\{\s*\}/g, '')
     // Czyść spacje
     .replace(/\s+/g, ' ')
     .trim();
+    
+  return cleaned;
 }
+
 function normArtist(a) { 
   return (a || '').toLowerCase().replace(/\s+/g, ' ').trim(); 
+}
+
+// NOWE: Rozdzielanie artystów po feat/ft/&/x/vs
+function splitArtists(artistRaw) {
+  if (!artistRaw) return [];
+  const normalized = normArtist(artistRaw);
+  // Rozdziel po typowych separatorach
+  return normalized
+    .split(/\s*(?:,|&|x|vs\.?|versus|feat\.?|ft\.?|featuring|with)\s*/i)
+    .map(a => a.trim())
+    .filter(Boolean);
+}
+
+// NOWE: Oblicz overlap artystów (lepsze niż prosty jaccard)
+function artistOverlap(localArtist, spotifyArtists) {
+  const localTokens = splitArtists(localArtist);
+  const spotifyTokens = spotifyArtists.map(a => normArtist(a.name));
+  
+  if (localTokens.length === 0) return 0.5; // fallback gdy brak artysty
+  
+  let matches = 0;
+  for (const local of localTokens) {
+    for (const spotify of spotifyTokens) {
+      if (jaccard(local, spotify) > 0.6) {
+        matches++;
+        break;
+      }
+    }
+  }
+  
+  return matches / localTokens.length;
 }
 
 function jaccard(a, b) {
@@ -129,19 +170,65 @@ function durationScore(localMs, spMs) {
   return 0.4;
 }
 
+// ULEPSZONE: Lepszy scoring z overlap artystów i bonusem za remix
 function scoreCandidate(local, sp) {
   const tLocal = coreTitle(local.title);
   const tSp = coreTitle(sp.name);
   const aLocal = normArtist(local.artist || '');
-  const theArtists = (sp.artists || []).map(x => x.name).join(' & ');
-  const aSp = normArtist(theArtists);
+  const spArtists = sp.artists || [];
   
+  // Score tytułu
   const titleScore = jaccard(tLocal, tSp);
-  const artistScore = aLocal ? jaccard(aLocal, aSp) : 0.5;
+  
+  // Score artysty - użyj overlap zamiast prostego jaccard
+  const artistScore = aLocal ? artistOverlap(local.artist, spArtists) : 0.5;
+  
+  // Score czasu trwania
   const durScore = durationScore(local.durationMs, sp.duration_ms);
   
-  // NOWE WAGI: więcej na tytuł i artystę, mniej na czas
-  return 0.55 * titleScore + 0.35 * artistScore + 0.10 * durScore;
+  // Bonus za dokładne dopasowanie remixu
+  const localHasRemix = /\b(remix|edit)\b/i.test(local.title || '');
+  const spHasRemix = /\b(remix|edit)\b/i.test(sp.name || '');
+  const remixBonus = (localHasRemix && spHasRemix) ? 0.05 : 0;
+  
+  // NOWE WAGI: 50% tytuł, 40% artysta, 10% czas
+  return Math.min(1.0, 0.50 * titleScore + 0.40 * artistScore + 0.10 * durScore + remixBonus);
+}
+
+// NOWE: Budowanie wielu wariantów zapytań
+function buildSearchQueries(track) {
+  const title = coreTitle(track.title || '');
+  const artist = normArtist(track.artist || '');
+  const artists = splitArtists(track.artist || '');
+  
+  // Wykryj czy to remix/edit
+  const hasRemix = /\b(remix|edit|mix|bootleg|mashup|vip)\b/i.test(track.title || '');
+  const titleNoRemix = title.replace(/\b(remix|edit|mix|bootleg|mashup|vip)\b/gi, '').trim();
+  
+  const queries = [];
+  
+  // Zapytanie podstawowe
+  if (artist && title) {
+    queries.push(`${artist} ${title}`);
+  }
+  
+  // Tylko tytuł (gdy artist może być błędny z YouTube)
+  if (title) {
+    queries.push(title);
+  }
+  
+  // Z wieloma artystami
+  if (artists.length > 1 && title) {
+    queries.push(`${artists[0]} ${artists[1]} ${title}`);
+  }
+  
+  // Wariant bez remix/edit (może znajdzie oryginał)
+  if (hasRemix && titleNoRemix && artist) {
+    queries.push(`${artist} ${titleNoRemix}`);
+  }
+  
+  // Deduplikuj i ogranicz do 4 zapytań
+  return [...new Set(queries)].slice(0, 4);
 }
 
 async function spotifySearch(q, userAccessToken, limit = 5) {
@@ -346,11 +433,24 @@ app.post('/api/match', requireAuth, async (req, res) => {
         for (let idx = 0; idx < groups.length; idx++) {
           const group = groups[idx];
           const t = group.track;
-          const q = [t.title, t.artist].filter(Boolean).join(' ');
-          const items = await spotifySearch(q, userAccess, 5);
+          
+          // ULEPSZONE: Wielowariantowe zapytania
+          const queries = buildSearchQueries(t);
+          const allItems = [];
+          const seenIds = new Set();
+          
+          for (const q of queries) {
+            const items = await spotifySearch(q, userAccess, 5);
+            for (const item of items) {
+              if (!seenIds.has(item.id)) {
+                allItems.push(item);
+                seenIds.add(item.id);
+              }
+            }
+          }
           
           let best = null, bestScore = -1;
-          for (const it of items) {
+          for (const it of allItems) {
             const s = scoreCandidate(t, it);
             if (s > bestScore) { best = it; bestScore = s; }
           }
@@ -360,7 +460,7 @@ app.post('/api/match', requireAuth, async (req, res) => {
           // Update progress
           matchProgress.set(userId, { current: idx + 1, total: groups.length, results: null, done: false, error: null });
           
-          await new Promise(r => setTimeout(r, 120));
+          await new Promise(r => setTimeout(r, 150));
         }
         
         // Oblicz próg
@@ -446,11 +546,24 @@ app.post('/api/match-stream', requireAuth, async (req, res) => {
     for (let idx = 0; idx < groups.length; idx++) {
       const group = groups[idx];
       const t = group.track;
-      const q = [t.title, t.artist].filter(Boolean).join(' ');
-      const items = await spotifySearch(q, userAccess, 5);
+      
+      // ULEPSZONE: Wielowariantowe zapytania
+      const queries = buildSearchQueries(t);
+      const allItems = [];
+      const seenIds = new Set();
+      
+      for (const q of queries) {
+        const items = await spotifySearch(q, userAccess, 5);
+        for (const item of items) {
+          if (!seenIds.has(item.id)) {
+            allItems.push(item);
+            seenIds.add(item.id);
+          }
+        }
+      }
       
       let best = null, bestScore = -1;
-      for (const it of items) {
+      for (const it of allItems) {
         const s = scoreCandidate(t, it);
         if (s > bestScore) { best = it; bestScore = s; }
       }
@@ -461,7 +574,7 @@ app.post('/api/match-stream', requireAuth, async (req, res) => {
       const progress = Math.round(((idx + 1) / total) * 100);
       res.write(`data: ${JSON.stringify({ type: 'progress', value: progress, current: idx + 1, total })}\n\n`);
       
-      await new Promise(r => setTimeout(r, 120));
+      await new Promise(r => setTimeout(r, 150));
     }
     
     // Oblicz próg jak wcześniej

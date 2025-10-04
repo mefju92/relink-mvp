@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Ulepszanie dopasowań – generowanie bogatszych zapytań i podbijanie słabych wyników */
+/* src/enhanceMatches.cjs - Ulepszanie dopasowań z wielowariantowymi zapytaniami */
 const fs = require('fs');
 const path = require('path');
 const minimist = require('minimist');
@@ -16,18 +16,20 @@ function stripPathPrefix(raw) {
   // Usuń wszystko do ostatniego / lub \
   return String(raw).replace(/^.*[\\/]/, '');
 }
+
 function norm(s) {
   if (!s) return '';
   return stripDiacritics(String(s))
     .replace(/[–—]/g, '-')
-    .replace(/[’]/g, "'")
+    .replace(/[']/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
 }
-// Wytnij marketing/śmieci: (Official Video), [HD], - Radio Edit, - Extended Mix, "out now", "copy (1)" itd.
+
+// ULEPSZONE: Wytnij marketing/śmieci + Copy (1)
 function coreTitle(raw) {
   if (!raw) return '';
-  let s = stripPathPrefix(raw);       // <— NOWE: usuń "Favorites/..."
+  let s = stripPathPrefix(raw);
   s = norm(s);
 
   // dopiski w nawiasach
@@ -39,8 +41,12 @@ function coreTitle(raw) {
   // końcowe [HD]/[Official] itp.
   s = s.replace(/\s*\[(?:hd|hq|official|lyrics?|audio|video|music video|mv)\]\s*$/i, '');
 
-  // pojedyncze „official/out now” na końcu
+  // pojedyncze „official/out now" na końcu
   s = s.replace(/\b(official|out now)\s*$/i, '');
+  
+  // NOWE: Usuń Copy (1), Copy (2) itp.
+  s = s.replace(/\s*-?\s*copy\s*\(\d+\)\s*$/i, '');
+  s = s.replace(/\s*\(\s*copy\s*\d*\s*\)/gi, '');
 
   // sprzątanie
   s = s.replace(/\s{2,}/g, ' ').replace(/\s*-\s*$/, '');
@@ -48,29 +54,74 @@ function coreTitle(raw) {
   return s.trim();
 }
 
-/* === Składanie zapytań do wyszukiwania === */
+// NOWE: Rozdzielanie artystów
+function splitArtists(artistRaw) {
+  if (!artistRaw) return [];
+  const normalized = norm(artistRaw);
+  return normalized
+    .split(/\s*(?:,|&|x|vs\.?|versus|feat\.?|ft\.?|featuring|with)\s*/i)
+    .map(a => a.trim())
+    .filter(Boolean);
+}
+
+// NOWE: Overlap artystów
+function artistOverlap(localArtists, spotifyArtists) {
+  const localTokens = localArtists;
+  const spotifyTokens = (spotifyArtists || []).map(a => norm(a.name));
+  
+  if (localTokens.length === 0) return 0;
+  
+  let matches = 0;
+  for (const local of localTokens) {
+    for (const spotify of spotifyTokens) {
+      const sim = stringSimilarity.compareTwoStrings(local.toLowerCase(), spotify.toLowerCase());
+      if (sim > 0.6) {
+        matches++;
+        break;
+      }
+    }
+  }
+  
+  return localTokens.length > 0 ? matches / localTokens.length : 0;
+}
+
+/* === ULEPSZONE: Składanie zapytań do wyszukiwania === */
 function buildQueries(artistRaw, titleRaw) {
-  const a = norm(artistRaw);
+  const artists = splitArtists(artistRaw);
   const t = norm(stripPathPrefix(titleRaw));
   const tCore = coreTitle(t);
   const tNoFeat = tCore.replace(/\bfeat\.?.*$/i, '').trim();
+  
+  // wykryj remix/edit
+  const hasRemix = /\b(remix|edit|mix)\b/i.test(tCore);
+  const tNoRemix = tCore.replace(/\b(remix|edit|mix|bootleg|mashup|vip)\b/gi, '').trim();
 
-  const variants = [
-    `${a} ${tCore}`,
-    `${a} ${tNoFeat}`,
-    `${tCore}`,
-    `${tNoFeat}`,
-    `"${tCore}" ${a}`,
-    `"${tNoFeat}" ${a}`,
-    `"${tCore}"`,
-    `"${tNoFeat}"`,
-    `${a} - ${tCore}`,
-    `${a} - ${tNoFeat}`,
-    `track:"${tCore}" artist:"${a}"`,
-    `track:"${tNoFeat}" artist:"${a}"`,
-  ];
+  const variants = [];
+  
+  // Z głównym artystą
+  if (artists.length > 0 && tCore) {
+    variants.push(`${artists[0]} ${tCore}`);
+    variants.push(`${artists[0]} ${tNoFeat}`);
+    variants.push(`track:"${tCore}" artist:"${artists[0]}"`);
+  }
+  
+  // Z wieloma artystami
+  if (artists.length > 1 && tCore) {
+    variants.push(`${artists[0]} ${artists[1]} ${tCore}`);
+  }
+  
+  // Samo tytuł
+  if (tCore) {
+    variants.push(`${tCore}`);
+    variants.push(`"${tCore}"`);
+  }
+  
+  // Wariant bez remix/edit
+  if (hasRemix && tNoRemix && artists.length > 0) {
+    variants.push(`${artists[0]} ${tNoRemix}`);
+  }
 
-  return [...new Set(variants.map(v => v.replace(/\s{2,}/g, ' ').trim()).filter(Boolean))];
+  return [...new Set(variants.map(v => v.replace(/\s{2,}/g, ' ').trim()).filter(Boolean))].slice(0, 8);
 }
 
 /* === Scoring === */
@@ -80,6 +131,7 @@ function titleSim(a, b) {
   if (!a || !b) return 0;
   return stringSimilarity.compareTwoStrings(a.toLowerCase(), b.toLowerCase());
 }
+
 function durationPenalty(localMs, spotifyMs, soft = 2500, hard = 8000) {
   if (!localMs || !spotifyMs) return 0.05;
   const diff = Math.abs(Number(localMs) - Number(spotifyMs));
@@ -87,14 +139,23 @@ function durationPenalty(localMs, spotifyMs, soft = 2500, hard = 8000) {
   if (diff >= hard) return 0.4;
   return 0.4 * ((diff - soft) / (hard - soft));
 }
+
 function compositeScore(local, sp, opts = {}) {
-  const { localTitle, localDurMs } = local;
+  const { localArtists, localTitle, localDurMs } = local;
   const tSim = titleSim(localTitle, sp.name);
+  const artOverlap = artistOverlap(localArtists, sp.artists || []);
   const pen = durationPenalty(localDurMs, sp.duration_ms, opts.softMs ?? 2500, opts.hardMs ?? 8000);
   const diff = Math.abs((localDurMs || 0) - (sp.duration_ms || 0));
   const boost = diff <= 2000 ? 0.15 : diff <= 5000 ? 0.07 : 0;
-  let base = tSim;
-  base = Math.max(0, Math.min(1, base - pen + boost));
+  
+  // NOWE: Bonus za dopasowanie remix
+  const localHasRemix = /\b(remix|edit)\b/i.test(localTitle);
+  const spHasRemix = /\b(remix|edit)\b/i.test(sp.name);
+  const remixBonus = (localHasRemix && spHasRemix) ? 0.05 : 0;
+  
+  // WAGI: 50% tytuł, 40% artysta
+  let base = 0.50 * tSim + 0.40 * artOverlap;
+  base = Math.max(0, Math.min(1, base - pen + boost + remixBonus));
   return base;
 }
 
@@ -108,6 +169,7 @@ function newSpotifyClient() {
   if (process.env.SPOTIFY_REFRESH_TOKEN) api.setRefreshToken(process.env.SPOTIFY_REFRESH_TOKEN);
   return api;
 }
+
 async function getAccessToken(api) {
   if (!process.env.SPOTIFY_REFRESH_TOKEN) {
     throw new Error('Brak SPOTIFY_REFRESH_TOKEN w .env');
@@ -124,9 +186,9 @@ async function main() {
     default: {
       in: 'export/matches.csv',
       out: 'export/matches_enhanced.csv',
-      minScore: 0.65,
+      minScore: 0.60,
       durMs: 2500,
-      limit: 7,
+      limit: 10,
     },
   });
 
@@ -142,22 +204,38 @@ async function main() {
     const curId = r.spotify_track_id;
     const curScore = Number(r.match_score || 0);
     const localTitle = stripPathPrefix(r.title || r.filename || r.file || '');
+    const localArtist = r.artist || '';
+    const localArtists = splitArtists(localArtist);
     const localDurMs = Number(r.duration_ms || 0);
 
     // próbujemy tylko gdy brak ID albo słabo
-    if (curId && curScore >= Number(argv.minScore)) continue;
+    if (curId && curScore >= Number(argv.minScore)) {
+      if ((i + 1) % 50 === 0 || i === rows.length - 1) {
+        console.log(`…przetworzono ${i + 1}/${rows.length}`);
+      }
+      continue;
+    }
 
-    const queries = buildQueries(r.artist || '', localTitle);
-    let best = { score: curScore || 0, id: curId || '', name: r.spotify_track_name || '' };
+    const queries = buildQueries(localArtist, localTitle);
+    let best = { score: curScore || 0, id: curId || '', name: r.spotify_track_name || '', artists: r.spotify_artists || '' };
 
     for (const q of queries) {
       try {
         const res = await api.searchTracks(q, { limit: Math.min(Number(argv.limit), 50), market: 'from_token' });
         const items = res?.body?.tracks?.items || [];
         for (const sp of items) {
-          const s = compositeScore({ localTitle, localDurMs }, sp, { softMs: Number(argv.durMs), hardMs: 9000 });
+          const s = compositeScore(
+            { localArtists, localTitle, localDurMs }, 
+            sp, 
+            { softMs: Number(argv.durMs), hardMs: 9000 }
+          );
           if (s > best.score) {
-            best = { score: s, id: sp.id, name: sp.name };
+            best = { 
+              score: s, 
+              id: sp.id, 
+              name: sp.name,
+              artists: (sp.artists || []).map(a => a.name).join(', ')
+            };
           }
         }
       } catch {}
@@ -170,6 +248,11 @@ async function main() {
       r.spotify_track_id = best.id;
       r.match_score = best.score.toFixed(3);
       r.spotify_track_name = best.name || r.spotify_track_name || '';
+      r.spotify_artists = best.artists || r.spotify_artists || '';
+    }
+    
+    if ((i + 1) % 50 === 0 || i === rows.length - 1) {
+      console.log(`…przetworzono ${i + 1}/${rows.length}`);
     }
   }
 
