@@ -26,8 +26,7 @@ export default function Importer({ apiBase }) {
   const [playlistName, setPlaylistName] = useState('moja playlista')
 
   const [files, setFiles] = useState([])
-  const [selectedForPlaylist, setSelectedForPlaylist] = useState(new Set())
-  const [selectedForCloud, setSelectedForCloud] = useState(new Set())
+  const [selected, setSelected] = useState(new Set())
   const [scanning, setScanning] = useState(false)
   const [matched, setMatched] = useState([])
 
@@ -95,8 +94,7 @@ export default function Importer({ apiBase }) {
     if (!files.length) return alert('Najpierw dodaj pliki.')
     setScanning(true)
     setMatched([])
-    setSelectedForPlaylist(new Set())
-    setSelectedForCloud(new Set())
+    setSelected(new Set())
     
     try {
       const payload = {
@@ -122,12 +120,6 @@ export default function Importer({ apiBase }) {
       
       setMatched(data.results || [])
       
-      const matchedIndices = new Set()
-      data.results.forEach((m, i) => {
-        if (m.matched && !m.isDuplicate) matchedIndices.add(i)
-      })
-      setSelectedForPlaylist(matchedIndices)
-      
       const matchCount = data.results.filter(m => m.matched).length
       const totalCount = data.results.filter(m => !m.isDuplicate).length
       setFlash({ 
@@ -143,10 +135,10 @@ export default function Importer({ apiBase }) {
   }
 
   async function createPlaylist() {
-    const indices = [...selectedForPlaylist]
-    const tracksToAdd = indices.map(i => matched[i]).filter(m => m?.spotifyId)
+    const indices = [...selected]
+    const tracksToAdd = indices.map(i => matched[i]).filter(m => m?.matched && m?.spotifyId)
     
-    if (!tracksToAdd.length) return alert('Zaznacz utwory do dodania.')
+    if (!tracksToAdd.length) return alert('Zaznacz dopasowane utwory do playlisty.')
     
     try {
       const trackUris = tracksToAdd.map(m => `spotify:track:${m.spotifyId}`)
@@ -171,7 +163,7 @@ export default function Importer({ apiBase }) {
   }
 
   async function uploadToCloud() {
-    const indices = [...selectedForCloud]
+    const indices = [...selected]
     if (!indices.length) return alert('Zaznacz pliki do chmury.')
     const form = new FormData()
     indices.forEach(i => { const f = files[i]?.file; if (f) form.append('files', f, f.name) })
@@ -188,6 +180,16 @@ export default function Importer({ apiBase }) {
     } catch (e) {
       alert('Błąd chmury: ' + e.message)
     }
+  }
+
+  async function deleteSelected() {
+    if (!selected.size) return alert('Zaznacz pliki do usunięcia.')
+    if (!confirm(`Usunąć ${selected.size} zaznaczonych plików?`)) return
+    
+    const indices = [...selected].sort((a,b) => b - a)
+    setFiles(prev => prev.filter((_, i) => !indices.includes(i)))
+    setMatched(prev => prev.filter((_, i) => !indices.includes(i)))
+    setSelected(new Set())
   }
 
   async function loadCloud() {
@@ -256,11 +258,15 @@ export default function Importer({ apiBase }) {
     matched.forEach((m, i) => {
       if (m.matched && !m.isDuplicate) all.add(i)
     })
-    setSelectedForPlaylist(all)
+    setSelected(all)
   }
 
-  function deselectAll() {
-    setSelectedForPlaylist(new Set())
+  function selectAllUnmatched() {
+    const all = new Set()
+    matched.forEach((m, i) => {
+      if (!m.matched && !m.isDuplicate) all.add(i)
+    })
+    setSelected(all)
   }
 
   return (
@@ -329,7 +335,7 @@ export default function Importer({ apiBase }) {
                 <input value={playlistName} onChange={e=>setPlaylistName(e.target.value)} style={{ width:360, padding:6, marginLeft:8 }} placeholder="np. Moje importy" />
               </div>
 
-              <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:6 }}>
+              <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:10 }}>
                 <button onClick={()=>folderInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz folder</button>
                 <input ref={folderInputRef} type="file" style={{ display:'none' }} webkitdirectory="true" directory="true" multiple onChange={e=>handleFiles(e.target.files)} />
                 <button onClick={()=>multiInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz pliki</button>
@@ -337,23 +343,27 @@ export default function Importer({ apiBase }) {
                 <span style={{ fontSize:12, color:'#666' }}>Plików: {files.length}</span>
               </div>
 
-              <div style={{ display:'flex', gap:8, marginTop:10 }}>
-                <button onClick={scanAndMatch} disabled={scanning || !files.length} style={{ padding:'6px 10px', fontWeight:500 }}>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                <button onClick={scanAndMatch} disabled={scanning || !files.length} style={{ padding:'6px 12px', fontWeight:500, background:'#1d4ed8', color:'#fff', border:'1px solid #1e40af', borderRadius:6 }}>
                   {scanning ? 'Dopasowuję…' : 'Skanuj i dopasuj'}
                 </button>
+                
                 {matched.length > 0 && (
                   <>
-                    <button onClick={selectAllMatched} style={{ padding:'6px 10px', fontSize:12 }}>
+                    <button onClick={selectAllMatched} style={{ padding:'6px 10px', fontSize:13, border:'1px solid #16a34a', background:'#f0fdf4', color:'#16a34a', borderRadius:6 }}>
                       Zaznacz wszystkie dopasowane
                     </button>
-                    <button onClick={deselectAll} style={{ padding:'6px 10px', fontSize:12 }}>
-                      Odznacz wszystkie
+                    <button onClick={selectAllUnmatched} style={{ padding:'6px 10px', fontSize:13, border:'1px solid #eab308', background:'#fefce8', color:'#ca8a04', borderRadius:6 }}>
+                      Zaznacz wszystkie niedopasowane
                     </button>
-                    <button onClick={createPlaylist} disabled={!selectedForPlaylist.size} style={{ padding:'6px 10px', fontWeight:500 }}>
-                      Utwórz playlistę ({selectedForPlaylist.size})
+                    <button onClick={createPlaylist} disabled={!selected.size} style={{ padding:'6px 12px', fontWeight:500, background:'#16a34a', color:'#fff', border:'1px solid #15803d', borderRadius:6 }}>
+                      Utwórz playlistę ({selected.size})
                     </button>
-                    <button onClick={uploadToCloud} disabled={!selectedForCloud.size} style={{ padding:'6px 10px' }}>
-                      Do chmury ({selectedForCloud.size})
+                    <button onClick={uploadToCloud} disabled={!selected.size} style={{ padding:'6px 10px', fontSize:13, border:'1px solid #0891b2', background:'#cffafe', color:'#0e7490', borderRadius:6 }}>
+                      Do chmury ({selected.size})
+                    </button>
+                    <button onClick={deleteSelected} disabled={!selected.size} style={{ padding:'6px 10px', fontSize:13, border:'1px solid #dc2626', background:'#fee2e2', color:'#dc2626', borderRadius:6 }}>
+                      Skasuj ({selected.size})
                     </button>
                   </>
                 )}
@@ -368,8 +378,7 @@ export default function Importer({ apiBase }) {
                     <th style={{ textAlign:'left' }}>Plik</th>
                     <th style={{ textAlign:'left' }}>Artysta</th>
                     <th style={{ textAlign:'left' }}>Spotify</th>
-                    <th style={{ textAlign:'center', width:80 }}>Do playlisty</th>
-                    <th style={{ textAlign:'center', width:80 }}>Do chmury</th>
+                    <th style={{ textAlign:'center', width:60 }}>Zaznacz</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -381,7 +390,7 @@ export default function Importer({ apiBase }) {
                           <td style={{ textAlign:'center' }}>
                             <span style={{ color:'#999', fontSize:18 }}>⊗</span>
                           </td>
-                          <td colSpan={5} style={{ color:'#999', fontSize:12, fontStyle:'italic' }}>
+                          <td colSpan={4} style={{ color:'#999', fontSize:12, fontStyle:'italic' }}>
                             {f.name} <span style={{ color:'#f59e0b' }}>(duplikat - pominięto)</span>
                           </td>
                         </tr>
@@ -389,8 +398,7 @@ export default function Importer({ apiBase }) {
                     }
                     
                     const isMatched = m?.matched
-                    const checkedPlaylist = selectedForPlaylist.has(i)
-                    const checkedCloud = selectedForCloud.has(i)
+                    const checked = selected.has(i)
                     
                     return (
                       <tr key={i} style={{ borderTop:'1px solid #eee' }}>
@@ -414,42 +422,24 @@ export default function Importer({ apiBase }) {
                           )}
                         </td>
                         <td style={{ textAlign:'center' }}>
-                          {isMatched && (
-                            <input 
-                              type="checkbox" 
-                              checked={checkedPlaylist} 
-                              onChange={e=>{
-                                setSelectedForPlaylist(prev=>{
-                                  const next=new Set(prev)
-                                  if(e.target.checked) next.add(i)
-                                  else next.delete(i)
-                                  return next
-                                })
-                              }}
-                            />
-                          )}
-                        </td>
-                        <td style={{ textAlign:'center' }}>
-                          {!isMatched && (
-                            <input 
-                              type="checkbox" 
-                              checked={checkedCloud} 
-                              onChange={e=>{
-                                setSelectedForCloud(prev=>{
-                                  const next=new Set(prev)
-                                  if(e.target.checked) next.add(i)
-                                  else next.delete(i)
-                                  return next
-                                })
-                              }}
-                            />
-                          )}
+                          <input 
+                            type="checkbox" 
+                            checked={checked} 
+                            onChange={e=>{
+                              setSelected(prev=>{
+                                const next=new Set(prev)
+                                if(e.target.checked) next.add(i)
+                                else next.delete(i)
+                                return next
+                              })
+                            }}
+                          />
                         </td>
                       </tr>
                     )
                   })}
                   {!files.length && (
-                    <tr><td colSpan={6} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
+                    <tr><td colSpan={5} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
                       Dodaj pliki by rozpocząć
                     </td></tr>
                   )}
