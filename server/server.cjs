@@ -431,6 +431,89 @@ app.post('/api/match', requireAuth, async (req, res) => {
   }
 });
 
+app.post('/api/match-stream', requireAuth, async (req, res) => {
+  try {
+    const { tracks = [] } = req.body || {};
+    const userAccess = await getUserSpotifyAccessTokenByUserId(req.user.id);
+    
+    // Ustaw headers dla SSE
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    
+    const groups = groupDuplicates(tracks);
+    const allResults = [];
+    const total = groups.length;
+    
+    for (let idx = 0; idx < groups.length; idx++) {
+      const group = groups[idx];
+      const t = group.track;
+      const q = [t.title, t.artist].filter(Boolean).join(' ');
+      const items = await spotifySearch(q, userAccess, 5);
+      
+      let best = null, bestScore = -1;
+      for (const it of items) {
+        const s = scoreCandidate(t, it);
+        if (s > bestScore) { best = it; bestScore = s; }
+      }
+      
+      allResults.push({ best, bestScore, group, duplicates: group.duplicates.length });
+      
+      // Wyślij postęp do frontendu
+      const progress = Math.round(((idx + 1) / total) * 100);
+      res.write(`data: ${JSON.stringify({ type: 'progress', value: progress, current: idx + 1, total })}\n\n`);
+      
+      await new Promise(r => setTimeout(r, 120));
+    }
+    
+    // Oblicz próg jak wcześniej
+    const thresholds = [0.56, 0.50, 0.45, 0.40, 0.35, 0.30];
+    let chosenThreshold = 0.30;
+    for (const threshold of thresholds) {
+      const matched = allResults.filter(r => r.best && r.bestScore >= threshold).length;
+      if (matched / allResults.length >= 0.85) {
+        chosenThreshold = threshold;
+        break;
+      }
+    }
+    
+    // Przygotuj wyniki
+    const out = [];
+    for (const result of allResults) {
+      const { best, bestScore, duplicates } = result;
+      if (best && bestScore >= chosenThreshold) {
+        out.push({
+          spotifyId: best.id,
+          spotifyUrl: best.external_urls?.spotify,
+          name: best.name,
+          artists: (best.artists || []).map(a => a.name).join(', '),
+          score: Number(bestScore.toFixed(3)),
+          duplicates,
+          matched: true,
+          isDuplicate: false
+        });
+      } else {
+        out.push({ 
+          spotifyId: null, spotifyUrl: null, name: null, artists: null, 
+          score: Number(bestScore.toFixed(3)),
+          duplicates, matched: false, isDuplicate: false
+        });
+      }
+      for (let i = 0; i < duplicates; i++) {
+        out.push({ spotifyId: null, spotifyUrl: null, name: null, artists: null, score: 0, duplicates: 0, matched: false, isDuplicate: true });
+      }
+    }
+    
+    // Wyślij końcowe wyniki
+    res.write(`data: ${JSON.stringify({ type: 'complete', results: out, threshold: chosenThreshold })}\n\n`);
+    res.end();
+    
+  } catch (e) {
+    res.write(`data: ${JSON.stringify({ type: 'error', error: String(e) })}\n\n`);
+    res.end();
+  }
+});
+
 app.post('/api/playlist', requireAuth, async (req, res) => {
   try {
     const { name = PLAYLIST_NAME, trackUris = [] } = req.body || {};

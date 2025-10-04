@@ -106,63 +106,71 @@ export default function Importer({ apiBase }) {
   }
 
   async function scanAndMatch() {
-    if (!files.length) return alert('Najpierw dodaj pliki.')
-    setScanning(true)
-    setMatched([])
-    setSelected(new Set())
-    setScanProgress(0)
-    
-    try {
-      const payload = {
-        tracks: files.map(f => ({
-          title: cleanTitle(f.title || f.name),
-          artist: cleanArtist(f.artist || ''),
-          durationMs: f.durationMs || 0,
-        })),
-      }
-      
-      // Symulacja postępu (ponieważ backend zwraca wynik jednorazowo)
-      const progressInterval = setInterval(() => {
-        setScanProgress(prev => {
-          if (prev >= 95) return prev
-          return prev + Math.random() * 5
-        })
-      }, 200)
-      
-      const res = await fetch(`${apiBase}/api/match`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
-        body: JSON.stringify(payload),
-      })
-      
-      clearInterval(progressInterval)
-      setScanProgress(100)
-      
-      const data = await safeJson(res)
-      if (!data.ok) {
-        if (data.code === 'NO_LINK') {
-          alert('Nie połączono ze Spotify. Kliknij przycisk "Połącz Spotify".')
-          return
-        }
-        throw new Error(data.error || 'match failed')
-      }
-      
-      setMatched(data.results || [])
-      
-      const matchCount = data.results.filter(m => m.matched).length
-      const totalCount = data.results.filter(m => !m.isDuplicate).length
-      setFlash({ 
-        type: 'ok', 
-        text: `Dopasowano ${matchCount}/${totalCount} utworów (próg: ${data.threshold})` 
-      })
-      setTimeout(() => setFlash(null), 5000)
-    } catch (e) {
-      alert('Błąd dopasowania: ' + e.message)
-    } finally {
-      setScanning(false)
-      setScanProgress(0)
+  if (!files.length) return alert('Najpierw dodaj pliki.')
+  setScanning(true)
+  setMatched([])
+  setSelected(new Set())
+  setScanProgress(0)
+  
+  try {
+    const payload = {
+      tracks: files.map(f => ({
+        title: cleanTitle(f.title || f.name),
+        artist: cleanArtist(f.artist || ''),
+        durationMs: f.durationMs || 0,
+      })),
     }
+    
+    const headers = await authHeaders()
+    const res = await fetch(`${apiBase}/api/match-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(payload),
+    })
+    
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      
+      const chunk = decoder.decode(value)
+      const lines = chunk.split('\n')
+      
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = JSON.parse(line.slice(6))
+          
+          if (data.type === 'progress') {
+            setScanProgress(data.value)
+          } else if (data.type === 'complete') {
+            setMatched(data.results || [])
+            const matchCount = data.results.filter(m => m.matched).length
+            const totalCount = data.results.filter(m => !m.isDuplicate).length
+            setFlash({ 
+              type: 'ok', 
+              text: `Dopasowano ${matchCount}/${totalCount} utworów (próg: ${data.threshold})` 
+            })
+            setTimeout(() => setFlash(null), 5000)
+          } else if (data.type === 'error') {
+            throw new Error(data.error)
+          }
+        }
+      }
+    }
+    
+  } catch (e) {
+    if (e.message?.includes('NO_LINK')) {
+      alert('Nie połączono ze Spotify.')
+    } else {
+      alert('Błąd dopasowania: ' + e.message)
+    }
+  } finally {
+    setScanning(false)
+    setScanProgress(0)
   }
+}
 
   async function createPlaylist() {
     const indices = [...selected]
