@@ -3,10 +3,8 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 
-// node-fetch v3 (ESM)
 const fetch = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 
-// === ENV ===
 const {
   PORT = 5174,
   CORS_ORIGIN,
@@ -19,10 +17,8 @@ const {
   USER_LINKS_TABLE = 'user_links',
 } = process.env;
 
-// === App ===
 const app = express();
 
-// CORS
 app.use((req, res, next) => {
   const allowOrigin = CORS_ORIGIN || req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', allowOrigin);
@@ -42,11 +38,9 @@ function getBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
-// === Supabase (service role) ===
 const { createClient } = require('@supabase/supabase-js');
 const supa = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// === USER TOKEN ===
 async function getUserSpotifyAccessTokenByUserId(userId) {
   const { data, error } = await supa
     .from(USER_LINKS_TABLE)
@@ -67,10 +61,7 @@ async function getUserSpotifyAccessTokenByUserId(userId) {
       Authorization: 'Basic ' + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64'),
       'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refresh,
-    }),
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refresh }),
   });
   const j = await r.json();
   if (!r.ok) {
@@ -91,7 +82,6 @@ async function getSpotifyMe(accessToken) {
   return j;
 }
 
-// === Scoring ===
 function coreTitle(s) {
   return (s || '')
     .toLowerCase()
@@ -103,9 +93,11 @@ function coreTitle(s) {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
 function normArtist(a) { 
   return (a || '').toLowerCase().replace(/\s+/g, ' ').trim(); 
 }
+
 function jaccard(a, b) {
   const A = new Set(a.split(' '));
   const B = new Set(b.split(' '));
@@ -113,6 +105,7 @@ function jaccard(a, b) {
   const U = new Set([...A, ...B]).size || 1;
   return I / U;
 }
+
 function durationScore(localMs, spMs) {
   if (!localMs || !spMs) return 0.5;
   const diff = Math.abs(localMs - spMs);
@@ -123,6 +116,7 @@ function durationScore(localMs, spMs) {
   if (diff <= 12000) return 0.5;
   return 0.3;
 }
+
 function scoreCandidate(local, sp) {
   const tLocal = coreTitle(local.title);
   const tSp = coreTitle(sp.name);
@@ -148,7 +142,39 @@ async function spotifySearch(q, userAccessToken, limit = 5) {
   return json.tracks?.items || [];
 }
 
-// === Auth ===
+// Grupowanie duplikatów
+function groupDuplicates(tracks) {
+  const groups = [];
+  const seen = new Set();
+
+  tracks.forEach((track, idx) => {
+    if (seen.has(idx)) return;
+
+    const key = `${normArtist(track.artist || '')}_${coreTitle(track.title || '')}`;
+    const group = { 
+      master: idx, 
+      duplicates: [],
+      track 
+    };
+
+    tracks.forEach((other, otherIdx) => {
+      if (otherIdx <= idx) return;
+      
+      const otherKey = `${normArtist(other.artist || '')}_${coreTitle(other.title || '')}`;
+      const durationDiff = Math.abs((track.durationMs || 0) - (other.durationMs || 0));
+      
+      if (otherKey === key || (key && otherKey && key === otherKey && durationDiff < 3000)) {
+        group.duplicates.push(otherIdx);
+        seen.add(otherIdx);
+      }
+    });
+
+    groups.push(group);
+  });
+
+  return groups;
+}
+
 async function requireAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ ok: false, error: 'missing token' });
@@ -158,7 +184,6 @@ async function requireAuth(req, res, next) {
   next();
 }
 
-// === ROUTES ===
 app.get('/ping', (req, res) => {
   res.json({ ok: true, ts: Date.now(), base: getBaseUrl(req) });
 });
@@ -287,25 +312,67 @@ app.post('/api/spotify/disconnect', requireAuth, async (req, res) => {
 
 app.post('/api/match', requireAuth, async (req, res) => {
   try {
-    const { minScore = 0.58, tracks = [] } = req.body || {};
+    const { tracks = [] } = req.body || {};
     const userAccess = await getUserSpotifyAccessTokenByUserId(req.user.id);
     
-    const out = [];
-    for (const t of tracks) {
+    const groups = groupDuplicates(tracks);
+    
+    // Zbierz wszystkie wyniki z różnymi progami
+    const allResults = [];
+    
+    for (const group of groups) {
+      const t = group.track;
       const q = [t.title, t.artist].filter(Boolean).join(' ');
       const items = await spotifySearch(q, userAccess, 5);
+      
       let best = null, bestScore = -1;
       for (const it of items) {
         const s = scoreCandidate(t, it);
         if (s > bestScore) { best = it; bestScore = s; }
       }
-      if (best && bestScore >= minScore) {
+      
+      allResults.push({
+        best,
+        bestScore,
+        group,
+        duplicates: group.duplicates.length
+      });
+      
+      await new Promise(r => setTimeout(r, 120));
+    }
+    
+    // Adaptacyjny próg: szukaj progu dającego 85-95% dopasowań
+    const thresholds = [0.56, 0.50, 0.45, 0.40, 0.35];
+    let chosenThreshold = 0.56;
+    
+    for (const threshold of thresholds) {
+      const matched = allResults.filter(r => r.best && r.bestScore >= threshold).length;
+      const matchRate = matched / allResults.length;
+      
+      if (matchRate >= 0.85) {
+        chosenThreshold = threshold;
+        break;
+      }
+    }
+    
+    console.log(`[Match] Użyty próg: ${chosenThreshold}, dopasowano: ${allResults.filter(r => r.best && r.bestScore >= chosenThreshold).length}/${allResults.length}`);
+    
+    // Zwróć wyniki
+    const out = [];
+    
+    for (const result of allResults) {
+      const { best, bestScore, duplicates } = result;
+      
+      if (best && bestScore >= chosenThreshold) {
         out.push({
           spotifyId: best.id,
           spotifyUrl: best.external_urls?.spotify,
           name: best.name,
           artists: (best.artists || []).map(a => a.name).join(', '),
           score: Number(bestScore.toFixed(3)),
+          duplicates,
+          matched: true,
+          isDuplicate: false
         });
       } else {
         out.push({ 
@@ -313,12 +380,29 @@ app.post('/api/match', requireAuth, async (req, res) => {
           spotifyUrl: null, 
           name: null, 
           artists: null, 
-          score: Number(bestScore.toFixed(3)) 
+          score: Number(bestScore.toFixed(3)),
+          duplicates,
+          matched: false,
+          isDuplicate: false
         });
       }
-      await new Promise(r => setTimeout(r, 120));
+      
+      // Oznacz duplikaty
+      for (let i = 0; i < duplicates; i++) {
+        out.push({
+          spotifyId: null,
+          spotifyUrl: null,
+          name: null,
+          artists: null,
+          score: 0,
+          duplicates: 0,
+          matched: false,
+          isDuplicate: true
+        });
+      }
     }
-    res.json({ ok: true, results: out });
+    
+    res.json({ ok: true, results: out, threshold: chosenThreshold });
   } catch (e) {
     if (e && e.code === 'NO_LINK') {
       return res.status(409).json({ ok: false, error: 'Spotify not connected', code: 'NO_LINK' });

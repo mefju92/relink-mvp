@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './supabaseClient'
 
-// === utils ===
 function bytes(n){ if(n==null) return '-'; const u=['B','KB','MB','GB']; let i=0,x=n; while(x>=1024&&i<u.length-1){x/=1024;i++} return `${x.toFixed(1)} ${u[i]}` }
 async function safeJson(res){ const t=await res.text(); try{return JSON.parse(t)}catch{ throw new Error(`HTTP ${res.status}. Body starts with: ${t.slice(0,120)}`) } }
 function cleanWhitespace(s=''){ return s.replace(/\s{2,}/g,' ').trim() }
@@ -19,16 +18,15 @@ const CLEAN_COPY_RX=/-\s*copy(\s*\(\d+\))?/gi
 function cleanTitle(s){ return (s||'').replace(CLEAN_PARENS_RX,'').replace(CLEAN_COPY_RX,'').replace(/\s{2,}/g,' ').trim() }
 function cleanArtist(s){ return (s||'').replace(/\s*-\s*topic$/i,'').trim() }
 
-// === component ===
 export default function Importer({ apiBase }) {
   const nav = useNavigate()
   const location = useLocation()
 
   const [tab, setTab] = useState('import')
   const [playlistName, setPlaylistName] = useState('moja playlista')
-  const [minScore, setMinScore] = useState(0.58)
 
   const [files, setFiles] = useState([])
+  const [selectedForPlaylist, setSelectedForPlaylist] = useState(new Set())
   const [selectedForCloud, setSelectedForCloud] = useState(new Set())
   const [scanning, setScanning] = useState(false)
   const [matched, setMatched] = useState([])
@@ -43,9 +41,6 @@ export default function Importer({ apiBase }) {
   const folderInputRef = useRef(null)
   const multiInputRef = useRef(null)
 
-  console.log('[Importer] apiBase =', apiBase)
-
-  // bez sesji – cofamy na /
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       if (!data?.session) nav('/')
@@ -62,7 +57,6 @@ export default function Importer({ apiBase }) {
     try {
       const res = await fetch(`${apiBase}/api/spotify/status`, { headers: { ...(await authHeaders()) } })
       const data = await safeJson(res)
-      console.log('[Importer] /api/spotify/status →', data)
       if (data.ok && data.connected) setSpName(data.name || 'Połączono')
       else setSpName(null)
     } catch (e) {
@@ -71,11 +65,8 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  // po załadowaniu
   useEffect(() => { fetchSpotifyStatus() }, [])
-  // kiedy przełączamy na chmurę
   useEffect(() => { if (tab === 'cloud') loadCloud() }, [tab])
-  // po powrocie z OAuth (?spotify=...):
   useEffect(() => {
     const url = new URL(window.location.href)
     const flag = url.searchParams.get('spotify')
@@ -103,9 +94,12 @@ export default function Importer({ apiBase }) {
   async function scanAndMatch() {
     if (!files.length) return alert('Najpierw dodaj pliki.')
     setScanning(true)
+    setMatched([])
+    setSelectedForPlaylist(new Set())
+    setSelectedForCloud(new Set())
+    
     try {
       const payload = {
-        minScore,
         tracks: files.map(f => ({
           title: cleanTitle(f.title || f.name),
           artist: cleanArtist(f.artist || ''),
@@ -120,12 +114,27 @@ export default function Importer({ apiBase }) {
       const data = await safeJson(res)
       if (!data.ok) {
         if (data.code === 'NO_LINK') {
-          alert('Nie połączono ze Spotify. Kliknij przycisk "Połącz Spotify" żeby połączyć konto.')
+          alert('Nie połączono ze Spotify. Kliknij przycisk "Połącz Spotify".')
           return
         }
         throw new Error(data.error || 'match failed')
       }
+      
       setMatched(data.results || [])
+      
+      const matchedIndices = new Set()
+      data.results.forEach((m, i) => {
+        if (m.matched && !m.isDuplicate) matchedIndices.add(i)
+      })
+      setSelectedForPlaylist(matchedIndices)
+      
+      const matchCount = data.results.filter(m => m.matched).length
+      const totalCount = data.results.filter(m => !m.isDuplicate).length
+      setFlash({ 
+        type: 'ok', 
+        text: `Dopasowano ${matchCount}/${totalCount} utworów (próg: ${data.threshold})` 
+      })
+      setTimeout(() => setFlash(null), 5000)
     } catch (e) {
       alert('Błąd dopasowania: ' + e.message)
     } finally {
@@ -134,10 +143,13 @@ export default function Importer({ apiBase }) {
   }
 
   async function createPlaylist() {
-    const ok = matched.filter(m => m.spotifyId)
-    if (!ok.length) return alert('Brak dopasowań do dodania.')
+    const indices = [...selectedForPlaylist]
+    const tracksToAdd = indices.map(i => matched[i]).filter(m => m?.spotifyId)
+    
+    if (!tracksToAdd.length) return alert('Zaznacz utwory do dodania.')
+    
     try {
-      const trackUris = ok.map(m => `spotify:track:${m.spotifyId}`)
+      const trackUris = tracksToAdd.map(m => `spotify:track:${m.spotifyId}`)
       const res = await fetch(`${apiBase}/api/playlist`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
@@ -146,13 +158,13 @@ export default function Importer({ apiBase }) {
       const data = await safeJson(res)
       if (!data.ok) {
         if (data.code === 'NO_LINK') {
-          alert('Nie połączono ze Spotify. Kliknij przycisk "Połącz Spotify" żeby połączyć konto.')
+          alert('Nie połączono ze Spotify.')
           return
         }
         throw new Error(data.error || 'playlist failed')
       }
       if (data.playlistUrl) window.open(data.playlistUrl, '_blank')
-      else alert('Playlist utworzona (brak linku URL).')
+      else alert('Playlist utworzona.')
     } catch (e) {
       alert('Błąd tworzenia playlisty: ' + e.message)
     }
@@ -160,7 +172,7 @@ export default function Importer({ apiBase }) {
 
   async function uploadToCloud() {
     const indices = [...selectedForCloud]
-    if (!indices.length) return alert('Zaznacz pliki do chmury (kolumna „Do chmury").')
+    if (!indices.length) return alert('Zaznacz pliki do chmury.')
     const form = new FormData()
     indices.forEach(i => { const f = files[i]?.file; if (f) form.append('files', f, f.name) })
     try {
@@ -171,10 +183,10 @@ export default function Importer({ apiBase }) {
       })
       const data = await safeJson(res)
       if (!data.ok) throw new Error(data.error || 'upload failed')
-      alert(`Przeniesiono do chmury: ${data.files.filter(x => x.ok).length} plików`)
+      alert(`Przeniesiono: ${data.files.filter(x => x.ok).length} plików`)
       await loadCloud()
     } catch (e) {
-      alert('Błąd chmury (upload): ' + e.message)
+      alert('Błąd chmury: ' + e.message)
     }
   }
 
@@ -202,7 +214,7 @@ export default function Importer({ apiBase }) {
       const { data } = await supabase.auth.getSession()
       const token = data.session?.access_token || ''
       if (!token) { 
-        alert('Najpierw zaloguj się w aplikacji.') 
+        alert('Najpierw zaloguj się.') 
         return 
       }
       
@@ -210,18 +222,17 @@ export default function Importer({ apiBase }) {
       const frontendUrl = `${origin}/app`
       
       const url = `${apiBase}/spotify/login?frontend=${encodeURIComponent(frontendUrl)}&token=${encodeURIComponent(token)}`
-      console.log('[Importer] redirect →', url)
       
       setConnecting(true)
       window.location.assign(url)
     } catch (e) {
       setConnecting(false)
-      alert('Nie udało się rozpocząć logowania do Spotify: ' + (e?.message || e))
+      alert('Błąd: ' + (e?.message || e))
     }
   }
 
   async function disconnectSpotify() {
-    if (!confirm('Czy na pewno chcesz odłączyć konto Spotify?')) return
+    if (!confirm('Odłączyć Spotify?')) return
     
     try {
       const res = await fetch(`${apiBase}/api/spotify/disconnect`, {
@@ -233,16 +244,28 @@ export default function Importer({ apiBase }) {
       if (!data.ok) throw new Error(data.error || 'disconnect failed')
       
       setSpName(null)
-      setFlash({ type: 'ok', text: 'Odłączono od Spotify' })
+      setFlash({ type: 'ok', text: 'Odłączono Spotify' })
       setTimeout(() => setFlash(null), 3000)
     } catch (e) {
-      alert('Błąd odłączania: ' + e.message)
+      alert('Błąd: ' + e.message)
     }
+  }
+
+  function selectAllMatched() {
+    const all = new Set()
+    matched.forEach((m, i) => {
+      if (m.matched && !m.isDuplicate) all.add(i)
+    })
+    setSelectedForPlaylist(all)
+  }
+
+  function deselectAll() {
+    setSelectedForPlaylist(new Set())
   }
 
   return (
     <div style={{ minHeight:'100svh', display:'grid', placeItems:'center', padding:'24px', fontFamily:'system-ui, sans-serif' }}>
-      <div style={{ width:'min(1100px, 96vw)', background:'#fff', border:'1px solid #e5e7eb', borderRadius:12, padding:16, boxShadow:'0 6px 24px rgba(0,0,0,0.06)' }}>
+      <div style={{ width:'min(1200px, 96vw)', background:'#fff', border:'1px solid #e5e7eb', borderRadius:12, padding:16, boxShadow:'0 6px 24px rgba(0,0,0,0.06)' }}>
         {flash && (
           <div style={{
             marginBottom:10, padding:'8px 12px',
@@ -263,13 +286,13 @@ export default function Importer({ apiBase }) {
                 <span style={{ padding:'6px 10px', background:'#eefbf3', border:'1px solid #b7e6c7', color:'#0c6b2a', borderRadius:8, fontSize:14 }}>
                   Spotify: <b>{spName}</b>
                 </span>
-                <button onClick={disconnectSpotify} title="Odłącz konto Spotify"
+                <button onClick={disconnectSpotify} title="Odłącz Spotify"
                   style={{ padding:'5px 9px', border:'1px solid #dc2626', background:'#fee2e2', color:'#dc2626', borderRadius:8, fontSize:12, cursor:'pointer' }}>
                   Odłącz
                 </button>
               </div>
             ) : (
-              <button onClick={connectSpotify} disabled={connecting} title="Połącz konto Spotify"
+              <button onClick={connectSpotify} disabled={connecting}
                 style={{ 
                   padding:'7px 14px', 
                   border:'1px solid #1DB954', 
@@ -307,64 +330,129 @@ export default function Importer({ apiBase }) {
               </div>
 
               <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:6 }}>
-                <button onClick={()=>folderInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz folder (całość)</button>
+                <button onClick={()=>folderInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz folder</button>
                 <input ref={folderInputRef} type="file" style={{ display:'none' }} webkitdirectory="true" directory="true" multiple onChange={e=>handleFiles(e.target.files)} />
                 <button onClick={()=>multiInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz pliki</button>
                 <input ref={multiInputRef} type="file" style={{ display:'none' }} multiple accept=".mp3,.m4a,.wav,.flac,.aac,.ogg" onChange={e=>handleFiles(e.target.files)} />
-                <span style={{ fontSize:12, color:'#666' }}>Liczba plików: {files.length}</span>
-              </div>
-
-              <div style={{ marginTop:8, marginBottom:8 }}>
-                <div style={{ fontSize:12 }}>Minimalny score: {minScore.toFixed(3)}</div>
-                <input type="range" min={0} max={1} step={0.001} value={minScore} onChange={e=>setMinScore(Number(e.target.value))} style={{ width:420 }} />
-                <div style={{ fontSize:11, color:'#666', marginTop:2 }}>(Próg działa po stronie serwera — im niższy, tym więcej trafień)</div>
+                <span style={{ fontSize:12, color:'#666' }}>Plików: {files.length}</span>
               </div>
 
               <div style={{ display:'flex', gap:8, marginTop:10 }}>
-                <button onClick={scanAndMatch} disabled={scanning || !files.length} style={{ padding:'6px 10px' }}>
+                <button onClick={scanAndMatch} disabled={scanning || !files.length} style={{ padding:'6px 10px', fontWeight:500 }}>
                   {scanning ? 'Dopasowuję…' : 'Skanuj i dopasuj'}
                 </button>
-                <button onClick={createPlaylist} disabled={!matched.some(m=>m.spotifyId)} style={{ padding:'6px 10px' }}>
-                  Utwórz playlistę
-                </button>
-                <button onClick={uploadToCloud} disabled={!selectedForCloud.size} style={{ padding:'6px 10px' }}>
-                  Przenieś do chmury ({selectedForCloud.size})
-                </button>
+                {matched.length > 0 && (
+                  <>
+                    <button onClick={selectAllMatched} style={{ padding:'6px 10px', fontSize:12 }}>
+                      Zaznacz wszystkie dopasowane
+                    </button>
+                    <button onClick={deselectAll} style={{ padding:'6px 10px', fontSize:12 }}>
+                      Odznacz wszystkie
+                    </button>
+                    <button onClick={createPlaylist} disabled={!selectedForPlaylist.size} style={{ padding:'6px 10px', fontWeight:500 }}>
+                      Utwórz playlistę ({selectedForPlaylist.size})
+                    </button>
+                    <button onClick={uploadToCloud} disabled={!selectedForCloud.size} style={{ padding:'6px 10px' }}>
+                      Do chmury ({selectedForCloud.size})
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
-            <div style={{ marginTop:12 }}>
+            <div style={{ marginTop:12, overflowX:'auto' }}>
               <table width="100%" cellPadding={6} style={{ borderCollapse:'collapse' }}>
                 <thead style={{ background:'#f5f5f5' }}>
                   <tr>
-                    <th style={{ textAlign:'right', width:40 }}>#</th>
-                    <th style={{ textAlign:'left' }}>Plik / Tytuł</th>
+                    <th style={{ textAlign:'center', width:40 }}>Status</th>
+                    <th style={{ textAlign:'left' }}>Plik</th>
                     <th style={{ textAlign:'left' }}>Artysta</th>
                     <th style={{ textAlign:'left' }}>Spotify</th>
-                    <th style={{ textAlign:'right' }}>Score</th>
-                    <th style={{ textAlign:'center' }}>Do chmury</th>
+                    <th style={{ textAlign:'center', width:80 }}>Do playlisty</th>
+                    <th style={{ textAlign:'center', width:80 }}>Do chmury</th>
                   </tr>
                 </thead>
                 <tbody>
                   {files.map((f,i)=>{
                     const m = matched[i]
-                    const checked = selectedForCloud.has(i)
+                    if (m?.isDuplicate) {
+                      return (
+                        <tr key={i} style={{ borderTop:'1px solid #eee', background:'#fafafa' }}>
+                          <td style={{ textAlign:'center' }}>
+                            <span style={{ color:'#999', fontSize:18 }}>⊗</span>
+                          </td>
+                          <td colSpan={5} style={{ color:'#999', fontSize:12, fontStyle:'italic' }}>
+                            {f.name} <span style={{ color:'#f59e0b' }}>(duplikat - pominięto)</span>
+                          </td>
+                        </tr>
+                      )
+                    }
+                    
+                    const isMatched = m?.matched
+                    const checkedPlaylist = selectedForPlaylist.has(i)
+                    const checkedCloud = selectedForCloud.has(i)
+                    
                     return (
                       <tr key={i} style={{ borderTop:'1px solid #eee' }}>
-                        <td style={{ textAlign:'right', color:'#666' }}>{i+1}</td>
-                        <td>{f.name}</td>
-                        <td>{f.artist || '-'}</td>
-                        <td>{m?.spotifyUrl ? (<a href={m.spotifyUrl} target="_blank" rel="noreferrer">{m.name ? `${m.name} — ${m.artists || ''}` : 'Otwórz w Spotify'}</a>) : <span style={{ color:'#999' }}>—</span>}</td>
-                        <td style={{ textAlign:'right' }}>{m?.score != null ? m.score.toFixed(3) : '—'}</td>
                         <td style={{ textAlign:'center' }}>
-                          <input type="checkbox" checked={checked} onChange={e=>{
-                            setSelectedForCloud(prev=>{ const next=new Set(prev); if(e.target.checked) next.add(i); else next.delete(i); return next })
-                          }}/>
+                          <span style={{ fontSize:20 }}>{isMatched ? '🟢' : '🟡'}</span>
+                        </td>
+                        <td style={{ fontSize:13 }}>{f.name}</td>
+                        <td style={{ fontSize:13 }}>{f.artist || '-'}</td>
+                        <td style={{ fontSize:13 }}>
+                          {m?.spotifyUrl ? (
+                            <a href={m.spotifyUrl} target="_blank" rel="noreferrer">
+                              {m.name} — {m.artists}
+                            </a>
+                          ) : (
+                            <span style={{ color:'#999' }}>Brak dopasowania</span>
+                          )}
+                          {m?.duplicates > 0 && (
+                            <span style={{ marginLeft:6, fontSize:11, color:'#f59e0b' }}>
+                              (+{m.duplicates} {m.duplicates === 1 ? 'kopia' : 'kopii'})
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ textAlign:'center' }}>
+                          {isMatched && (
+                            <input 
+                              type="checkbox" 
+                              checked={checkedPlaylist} 
+                              onChange={e=>{
+                                setSelectedForPlaylist(prev=>{
+                                  const next=new Set(prev)
+                                  if(e.target.checked) next.add(i)
+                                  else next.delete(i)
+                                  return next
+                                })
+                              }}
+                            />
+                          )}
+                        </td>
+                        <td style={{ textAlign:'center' }}>
+                          {!isMatched && (
+                            <input 
+                              type="checkbox" 
+                              checked={checkedCloud} 
+                              onChange={e=>{
+                                setSelectedForCloud(prev=>{
+                                  const next=new Set(prev)
+                                  if(e.target.checked) next.add(i)
+                                  else next.delete(i)
+                                  return next
+                                })
+                              }}
+                            />
+                          )}
                         </td>
                       </tr>
                     )
                   })}
-                  {!files.length && (<tr><td colSpan={6} style={{ color:'#777', fontStyle:'italic' }}>Dodaj pliki by rozpocząć.</td></tr>)}
+                  {!files.length && (
+                    <tr><td colSpan={6} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
+                      Dodaj pliki by rozpocząć
+                    </td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -393,10 +481,18 @@ export default function Importer({ apiBase }) {
                   <tr key={idx} style={{ borderTop:'1px solid #eee' }}>
                     <td>{f.name}</td>
                     <td>{bytes(f.size)}</td>
-                    <td><audio src={f.url} controls preload="none" style={{ width:280 }} />{' '}<a href={f.url} download target="_blank" rel="noreferrer">Otwórz</a></td>
+                    <td>
+                      <audio src={f.url} controls preload="none" style={{ width:280 }} />
+                      {' '}
+                      <a href={f.url} download target="_blank" rel="noreferrer">Pobierz</a>
+                    </td>
                   </tr>
                 ))}
-                {!cloudFiles.length && (<tr><td colSpan={3} style={{ color:'#777', fontStyle:'italic' }}>Brak plików w chmurze.</td></tr>)}
+                {!cloudFiles.length && (
+                  <tr><td colSpan={3} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
+                    Brak plików
+                  </td></tr>
+                )}
               </tbody>
             </table>
           </div>
