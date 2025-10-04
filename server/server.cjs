@@ -85,22 +85,24 @@ async function getSpotifyMe(accessToken) {
 function coreTitle(s) {
   return (s || '')
     .toLowerCase()
-    // Usuń tylko oczywisty szum, ale ZOSTAW remix/edit/feat
+    // Usuń TYLKO oczywisty szum, ZOSTAW: remix, edit, feat, live
     .replace(/\b(out\s*now)\b/gi, '')
+    .replace(/\[\s*out\s*now\s*\]/gi, '')
     .replace(/\bofficial\s+(?:music\s+)?video\b/gi, '')
     .replace(/\bofficial\s+audio\b/gi, '')
-    .replace(/\bhd\b|\bhq\b/gi, '')
+    .replace(/\b(hd|hq|4k|8k)\b/gi, '')
     .replace(/\blyrics?\b/gi, '')
     .replace(/\blyric\s+video\b/gi, '')
-    .replace(/\bvisuali[sz]er\b/gi, '')
-    // Usuń tylko nawiasy kwadratowe (ale zostaw zawartość jeśli to remix/edit)
-    .replace(/\[(?!.*(?:remix|edit|mix|version|ft\.?|feat\.?).*\])[^\]]*\]/gi, '') // usuń [] tylko jeśli NIE ma remix/edit
-    .replace(/[\[\]]/g, '') // usuń same nawiasy [] (zostanie zawartość)
-    // Usuń zbędne spacje
+    .replace(/\(\d{4}\)/g, '') // usuń rok w nawiasach
+    .replace(/\d{3,4}p/gi, '') // usuń 1080p, 720p
+    // Usuń TYLKO puste nawiasy, zostaw te z treścią
+    .replace(/\(\s*\)/g, '')
+    .replace(/\[\s*\]/g, '')
+    .replace(/\{\s*\}/g, '')
+    // Czyść spacje
     .replace(/\s+/g, ' ')
     .trim();
 }
-
 function normArtist(a) { 
   return (a || '').toLowerCase().replace(/\s+/g, ' ').trim(); 
 }
@@ -114,14 +116,14 @@ function jaccard(a, b) {
 }
 
 function durationScore(localMs, spMs) {
-  if (!localMs || !spMs) return 0.5;
+  if (!localMs || !spMs) return 0.6; // wyższy fallback
   const diff = Math.abs(localMs - spMs);
-  if (diff <= 1000) return 1;
-  if (diff <= 3000) return 0.9;
-  if (diff <= 5000) return 0.8;
-  if (diff <= 8000) return 0.65;
-  if (diff <= 12000) return 0.5;
-  return 0.3;
+  if (diff <= 2000) return 1.0;    // ±2s
+  if (diff <= 5000) return 0.95;   // ±5s
+  if (diff <= 10000) return 0.85;  // ±10s
+  if (diff <= 20000) return 0.7;   // ±20s
+  if (diff <= 30000) return 0.55;  // ±30s
+  return 0.4;
 }
 
 function scoreCandidate(local, sp) {
@@ -130,10 +132,13 @@ function scoreCandidate(local, sp) {
   const aLocal = normArtist(local.artist || '');
   const theArtists = (sp.artists || []).map(x => x.name).join(' & ');
   const aSp = normArtist(theArtists);
+  
   const titleScore = jaccard(tLocal, tSp);
   const artistScore = aLocal ? jaccard(aLocal, aSp) : 0.5;
   const durScore = durationScore(local.durationMs, sp.duration_ms);
-  return 0.5 * titleScore + 0.35 * artistScore + 0.15 * durScore;
+  
+  // NOWE WAGI: więcej na tytuł i artystę, mniej na czas
+  return 0.55 * titleScore + 0.35 * artistScore + 0.10 * durScore;
 }
 
 async function spotifySearch(q, userAccessToken, limit = 5) {
