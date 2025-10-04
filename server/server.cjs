@@ -85,11 +85,18 @@ async function getSpotifyMe(accessToken) {
 function coreTitle(s) {
   return (s || '')
     .toLowerCase()
-    .replace(/\s+\(feat\..*?\)|\s+feat\..*$/g, '')
-    .replace(/\s+-\s+live.*$|\s+\(live.*\)$/g, '')
-    .replace(/\s+\(remaster.*\)|\s+-\s+remaster.*$/g, '')
-    .replace(/\bofficial\s+video\b|\bhd\b|\bhq\b|\blyrics?\b/gi, '')
-    .replace(/[\[\]\(\)]/g, ' ')
+    // Usuń tylko oczywisty szum, ale ZOSTAW remix/edit/feat
+    .replace(/\b(out\s*now)\b/gi, '')
+    .replace(/\bofficial\s+(?:music\s+)?video\b/gi, '')
+    .replace(/\bofficial\s+audio\b/gi, '')
+    .replace(/\bhd\b|\bhq\b/gi, '')
+    .replace(/\blyrics?\b/gi, '')
+    .replace(/\blyric\s+video\b/gi, '')
+    .replace(/\bvisuali[sz]er\b/gi, '')
+    // Usuń tylko nawiasy kwadratowe (ale zostaw zawartość jeśli to remix/edit)
+    .replace(/\[(?!.*(?:remix|edit|mix|version|ft\.?|feat\.?).*\])[^\]]*\]/gi, '') // usuń [] tylko jeśli NIE ma remix/edit
+    .replace(/[\[\]]/g, '') // usuń same nawiasy [] (zostanie zawartość)
+    // Usuń zbędne spacje
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -317,7 +324,7 @@ app.post('/api/match', requireAuth, async (req, res) => {
     
     const groups = groupDuplicates(tracks);
     
-    // Zbierz wszystkie wyniki z różnymi progami
+    // Zbierz wszystkie wyniki
     const allResults = [];
     
     for (const group of groups) {
@@ -341,13 +348,16 @@ app.post('/api/match', requireAuth, async (req, res) => {
       await new Promise(r => setTimeout(r, 120));
     }
     
-    // Adaptacyjny próg: szukaj progu dającego 85-95% dopasowań
-    const thresholds = [0.56, 0.50, 0.45, 0.40, 0.35];
-    let chosenThreshold = 0.56;
+    // POPRAWIONY adaptacyjny próg
+    const thresholds = [0.56, 0.50, 0.45, 0.40, 0.35, 0.30];
+    let chosenThreshold = 0.30; // domyślnie najniższy
     
+    // Znajdź najwyższy próg dający ≥85% dopasowań
     for (const threshold of thresholds) {
       const matched = allResults.filter(r => r.best && r.bestScore >= threshold).length;
       const matchRate = matched / allResults.length;
+      
+      console.log(`[Match] Próg ${threshold}: ${matched}/${allResults.length} = ${(matchRate*100).toFixed(1)}%`);
       
       if (matchRate >= 0.85) {
         chosenThreshold = threshold;
@@ -355,7 +365,9 @@ app.post('/api/match', requireAuth, async (req, res) => {
       }
     }
     
-    console.log(`[Match] Użyty próg: ${chosenThreshold}, dopasowano: ${allResults.filter(r => r.best && r.bestScore >= chosenThreshold).length}/${allResults.length}`);
+    // Jeśli nawet przy 0.30 mamy <85%, to i tak użyj 0.30 (bierz co się da)
+    const finalMatched = allResults.filter(r => r.best && r.bestScore >= chosenThreshold).length;
+    console.log(`[Match] WYBRANY próg: ${chosenThreshold}, dopasowano: ${finalMatched}/${allResults.length}`);
     
     // Zwróć wyniki
     const out = [];
@@ -387,7 +399,7 @@ app.post('/api/match', requireAuth, async (req, res) => {
         });
       }
       
-      // Oznacz duplikaty
+      // Duplikaty
       for (let i = 0; i < duplicates; i++) {
         out.push({
           spotifyId: null,

@@ -30,6 +30,10 @@ export default function Importer({ apiBase }) {
   const [scanning, setScanning] = useState(false)
   const [matched, setMatched] = useState([])
 
+  const [loadingFiles, setLoadingFiles] = useState(false)
+  const [loadingProgress, setLoadingProgress] = useState(0)
+  const [scanProgress, setScanProgress] = useState(0)
+
   const [cloudLoading, setCloudLoading] = useState(false)
   const [cloudFiles, setCloudFiles] = useState([])
 
@@ -82,12 +86,23 @@ export default function Importer({ apiBase }) {
 
   async function handleFiles(fileList) {
     const arr = Array.from(fileList || []).filter(f => /\.(mp3|m4a|wav|flac|aac|ogg)$/i.test(f.name))
-    const mapped = await Promise.all(arr.map(async (f) => {
+    if (!arr.length) return
+    
+    setLoadingFiles(true)
+    setLoadingProgress(0)
+    
+    const mapped = []
+    for (let i = 0; i < arr.length; i++) {
+      const f = arr[i]
       const { artist, title } = readTagFromName(f.name)
       const durationMs = await measureDurationMs(f)
-      return { file: f, name: f.name, artist, title, durationMs }
-    }))
+      mapped.push({ file: f, name: f.name, artist, title, durationMs })
+      setLoadingProgress(Math.round(((i + 1) / arr.length) * 100))
+    }
+    
     setFiles(prev => [...prev, ...mapped])
+    setLoadingFiles(false)
+    setLoadingProgress(0)
   }
 
   async function scanAndMatch() {
@@ -95,6 +110,7 @@ export default function Importer({ apiBase }) {
     setScanning(true)
     setMatched([])
     setSelected(new Set())
+    setScanProgress(0)
     
     try {
       const payload = {
@@ -104,11 +120,24 @@ export default function Importer({ apiBase }) {
           durationMs: f.durationMs || 0,
         })),
       }
+      
+      // Symulacja postępu (ponieważ backend zwraca wynik jednorazowo)
+      const progressInterval = setInterval(() => {
+        setScanProgress(prev => {
+          if (prev >= 95) return prev
+          return prev + Math.random() * 5
+        })
+      }, 200)
+      
       const res = await fetch(`${apiBase}/api/match`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
         body: JSON.stringify(payload),
       })
+      
+      clearInterval(progressInterval)
+      setScanProgress(100)
+      
       const data = await safeJson(res)
       if (!data.ok) {
         if (data.code === 'NO_LINK') {
@@ -131,6 +160,7 @@ export default function Importer({ apiBase }) {
       alert('Błąd dopasowania: ' + e.message)
     } finally {
       setScanning(false)
+      setScanProgress(0)
     }
   }
 
@@ -269,6 +299,14 @@ export default function Importer({ apiBase }) {
     setSelected(all)
   }
 
+  function selectAll() {
+    const all = new Set()
+    matched.forEach((m, i) => {
+      if (!m.isDuplicate) all.add(i)
+    })
+    setSelected(all)
+  }
+
   return (
     <div style={{ minHeight:'100svh', display:'grid', placeItems:'center', padding:'24px', fontFamily:'system-ui, sans-serif' }}>
       <div style={{ width:'min(1200px, 96vw)', background:'#fff', border:'1px solid #e5e7eb', borderRadius:12, padding:16, boxShadow:'0 6px 24px rgba(0,0,0,0.06)' }}>
@@ -336,12 +374,34 @@ export default function Importer({ apiBase }) {
               </div>
 
               <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:10 }}>
-                <button onClick={()=>folderInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz folder</button>
+                <button onClick={()=>folderInputRef.current?.click()} disabled={loadingFiles} style={{ padding:'6px 10px' }}>
+                  {loadingFiles ? 'Ładowanie…' : 'Wybierz folder'}
+                </button>
                 <input ref={folderInputRef} type="file" style={{ display:'none' }} webkitdirectory="true" directory="true" multiple onChange={e=>handleFiles(e.target.files)} />
-                <button onClick={()=>multiInputRef.current?.click()} style={{ padding:'6px 10px' }}>Wybierz pliki</button>
+                <button onClick={()=>multiInputRef.current?.click()} disabled={loadingFiles} style={{ padding:'6px 10px' }}>
+                  {loadingFiles ? 'Ładowanie…' : 'Wybierz pliki'}
+                </button>
                 <input ref={multiInputRef} type="file" style={{ display:'none' }} multiple accept=".mp3,.m4a,.wav,.flac,.aac,.ogg" onChange={e=>handleFiles(e.target.files)} />
                 <span style={{ fontSize:12, color:'#666' }}>Plików: {files.length}</span>
               </div>
+
+              {loadingFiles && (
+                <div style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:12, color:'#666', marginBottom:4 }}>Wczytywanie plików: {loadingProgress}%</div>
+                  <div style={{ width:'100%', height:8, background:'#e5e7eb', borderRadius:4, overflow:'hidden' }}>
+                    <div style={{ width:`${loadingProgress}%`, height:'100%', background:'#3b82f6', transition:'width 0.3s ease' }} />
+                  </div>
+                </div>
+              )}
+
+              {scanning && (
+                <div style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:12, color:'#666', marginBottom:4 }}>Dopasowywanie: {Math.round(scanProgress)}%</div>
+                  <div style={{ width:'100%', height:8, background:'#e5e7eb', borderRadius:4, overflow:'hidden' }}>
+                    <div style={{ width:`${scanProgress}%`, height:'100%', background:'#16a34a', transition:'width 0.3s ease' }} />
+                  </div>
+                </div>
+              )}
 
               <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
                 <button onClick={scanAndMatch} disabled={scanning || !files.length} style={{ padding:'6px 12px', fontWeight:500, background:'#1d4ed8', color:'#fff', border:'1px solid #1e40af', borderRadius:6 }}>
@@ -350,6 +410,9 @@ export default function Importer({ apiBase }) {
                 
                 {matched.length > 0 && (
                   <>
+                    <button onClick={selectAll} style={{ padding:'6px 10px', fontSize:13, border:'1px solid #6b7280', background:'#f9fafb', color:'#374151', borderRadius:6 }}>
+                      Zaznacz wszystkie
+                    </button>
                     <button onClick={selectAllMatched} style={{ padding:'6px 10px', fontSize:13, border:'1px solid #16a34a', background:'#f0fdf4', color:'#16a34a', borderRadius:6 }}>
                       Zaznacz wszystkie dopasowane
                     </button>
