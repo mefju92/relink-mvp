@@ -121,52 +121,71 @@ export default function Importer({ apiBase }) {
       })),
     }
     
-    const headers = await authHeaders()
-    const res = await fetch(`${apiBase}/api/match-stream`, {
+    // Start job
+    const res = await fetch(`${apiBase}/api/match`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
       body: JSON.stringify(payload),
     })
+    const data = await safeJson(res)
     
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
+    if (!data.ok) {
+      if (data.code === 'NO_LINK') {
+        alert('Nie połączono ze Spotify.')
+        return
+      }
+      throw new Error(data.error || 'match failed')
+    }
     
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      
-      const chunk = decoder.decode(value)
-      const lines = chunk.split('\n')
-      
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = JSON.parse(line.slice(6))
+    // Poll progress
+    const pollInterval = setInterval(async () => {
+      try {
+        const progressRes = await fetch(`${apiBase}/api/match/progress`, {
+          headers: { ...(await authHeaders()) }
+        })
+        const progressData = await safeJson(progressRes)
+        
+        if (!progressData.exists) {
+          clearInterval(pollInterval)
+          return
+        }
+        
+        if (progressData.current && progressData.total) {
+          const percent = Math.round((progressData.current / progressData.total) * 100)
+          setScanProgress(percent)
+        }
+        
+        if (progressData.done) {
+          clearInterval(pollInterval)
           
-          if (data.type === 'progress') {
-            setScanProgress(data.value)
-          } else if (data.type === 'complete') {
-            setMatched(data.results || [])
-            const matchCount = data.results.filter(m => m.matched).length
-            const totalCount = data.results.filter(m => !m.isDuplicate).length
+          if (progressData.error) {
+            throw new Error(progressData.error)
+          }
+          
+          if (progressData.results) {
+            setMatched(progressData.results.results || [])
+            const matchCount = progressData.results.results.filter(m => m.matched).length
+            const totalCount = progressData.results.results.filter(m => !m.isDuplicate).length
             setFlash({ 
               type: 'ok', 
-              text: `Dopasowano ${matchCount}/${totalCount} utworów (próg: ${data.threshold})` 
+              text: `Dopasowano ${matchCount}/${totalCount} utworów (próg: ${progressData.results.threshold})` 
             })
             setTimeout(() => setFlash(null), 5000)
-          } else if (data.type === 'error') {
-            throw new Error(data.error)
           }
+          
+          setScanning(false)
+          setScanProgress(0)
         }
+      } catch (e) {
+        clearInterval(pollInterval)
+        alert('Błąd sprawdzania progressu: ' + e.message)
+        setScanning(false)
+        setScanProgress(0)
       }
-    }
+    }, 500) // co 0.5s
     
   } catch (e) {
-    if (e.message?.includes('NO_LINK')) {
-      alert('Nie połączono ze Spotify.')
-    } else {
-      alert('Błąd dopasowania: ' + e.message)
-    }
-  } finally {
+    alert('Błąd dopasowania: ' + e.message)
     setScanning(false)
     setScanProgress(0)
   }
