@@ -36,7 +36,7 @@ export default function Importer({ apiBase }) {
   const [cloudLoading, setCloudLoading] = useState(false)
   const [cloudFiles, setCloudFiles] = useState([])
 
-  const [spName, setSpName] = useState(null) // nazwa konta Spotify
+  const [spName, setSpName] = useState(null)
   const [flash, setFlash] = useState(null)
   const [connecting, setConnecting] = useState(false)
 
@@ -78,7 +78,7 @@ export default function Importer({ apiBase }) {
   // po powrocie z OAuth (?spotify=...):
   useEffect(() => {
     const url = new URL(window.location.href)
-    const flag = url.searchParams.get('spotify') // ok | error
+    const flag = url.searchParams.get('spotify')
     const reason = url.searchParams.get('reason')
     if (flag) {
       if (flag === 'error') setFlash({ type:'err', text:`Błąd łączenia Spotify${reason ? `: ${reason}` : ''}` })
@@ -100,7 +100,6 @@ export default function Importer({ apiBase }) {
     setFiles(prev => [...prev, ...mapped])
   }
 
-  // dopasowanie
   async function scanAndMatch() {
     if (!files.length) return alert('Najpierw dodaj pliki.')
     setScanning(true)
@@ -119,7 +118,13 @@ export default function Importer({ apiBase }) {
         body: JSON.stringify(payload),
       })
       const data = await safeJson(res)
-      if (!data.ok) throw new Error(data.error || 'match failed')
+      if (!data.ok) {
+        if (data.code === 'NO_LINK') {
+          alert('Nie połączono ze Spotify. Kliknij przycisk "Połącz Spotify" żeby połączyć konto.')
+          return
+        }
+        throw new Error(data.error || 'match failed')
+      }
       setMatched(data.results || [])
     } catch (e) {
       alert('Błąd dopasowania: ' + e.message)
@@ -128,7 +133,6 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  // playlisty
   async function createPlaylist() {
     const ok = matched.filter(m => m.spotifyId)
     if (!ok.length) return alert('Brak dopasowań do dodania.')
@@ -140,7 +144,13 @@ export default function Importer({ apiBase }) {
         body: JSON.stringify({ name: playlistName, trackUris }),
       })
       const data = await safeJson(res)
-      if (!data.ok) throw new Error(data.error || 'playlist failed')
+      if (!data.ok) {
+        if (data.code === 'NO_LINK') {
+          alert('Nie połączono ze Spotify. Kliknij przycisk "Połącz Spotify" żeby połączyć konto.')
+          return
+        }
+        throw new Error(data.error || 'playlist failed')
+      }
       if (data.playlistUrl) window.open(data.playlistUrl, '_blank')
       else alert('Playlist utworzona (brak linku URL).')
     } catch (e) {
@@ -148,10 +158,9 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  // chmura
   async function uploadToCloud() {
     const indices = [...selectedForCloud]
-    if (!indices.length) return alert('Zaznacz pliki do chmury (kolumna „Do chmury”).')
+    if (!indices.length) return alert('Zaznacz pliki do chmury (kolumna „Do chmury").')
     const form = new FormData()
     indices.forEach(i => { const f = files[i]?.file; if (f) form.append('files', f, f.name) })
     try {
@@ -188,20 +197,46 @@ export default function Importer({ apiBase }) {
     nav('/')
   }
 
-  // Połącz Spotify – UWAGA: frontend bez /app; serwer dopina /app tylko raz
   async function connectSpotify() {
     try {
       const { data } = await supabase.auth.getSession()
       const token = data.session?.access_token || ''
-      if (!token) { alert('Najpierw zaloguj się w aplikacji.'); return }
-      const origin = window.location.origin // <-- bez /app
-      const url = `${apiBase}/spotify/login?frontend=${encodeURIComponent(origin)}&token=${encodeURIComponent(token)}`
+      if (!token) { 
+        alert('Najpierw zaloguj się w aplikacji.') 
+        return 
+      }
+      
+      const origin = window.location.origin
+      const frontendUrl = `${origin}/app`
+      
+      const url = `${apiBase}/spotify/login?frontend=${encodeURIComponent(frontendUrl)}&token=${encodeURIComponent(token)}`
       console.log('[Importer] redirect →', url)
+      
       setConnecting(true)
       window.location.assign(url)
     } catch (e) {
       setConnecting(false)
       alert('Nie udało się rozpocząć logowania do Spotify: ' + (e?.message || e))
+    }
+  }
+
+  async function disconnectSpotify() {
+    if (!confirm('Czy na pewno chcesz odłączyć konto Spotify?')) return
+    
+    try {
+      const res = await fetch(`${apiBase}/api/spotify/disconnect`, {
+        method: 'POST',
+        headers: { ...(await authHeaders()) },
+      })
+      const data = await safeJson(res)
+      
+      if (!data.ok) throw new Error(data.error || 'disconnect failed')
+      
+      setSpName(null)
+      setFlash({ type: 'ok', text: 'Odłączono od Spotify' })
+      setTimeout(() => setFlash(null), 3000)
+    } catch (e) {
+      alert('Błąd odłączania: ' + e.message)
     }
   }
 
@@ -216,30 +251,44 @@ export default function Importer({ apiBase }) {
             color: flash.type==='ok' ? '#0a6b2a' : '#a11',
             border: '1px solid ' + (flash.type==='ok' ? '#bfe7cc' : '#f4c7c7')
           }}>
-            {flash.text}{spName ? ` — ${spName}` : ''}
+            {flash.text}
           </div>
         )}
 
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-          <h2 style={{ margin:8 }}>ReLink MVP (Spotify)</h2>
+          <h2 style={{ margin:8 }}>ReLink MVP</h2>
           <div style={{ display:'flex', gap:8, alignItems:'center' }}>
             {spName ? (
-              <span style={{ padding:'6px 10px', background:'#eefbf3', border:'1px solid #b7e6c7', color:'#0c6b2a', borderRadius:8 }}>
-                Spotify: <b>{spName}</b>
-              </span>
+              <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                <span style={{ padding:'6px 10px', background:'#eefbf3', border:'1px solid #b7e6c7', color:'#0c6b2a', borderRadius:8, fontSize:14 }}>
+                  Spotify: <b>{spName}</b>
+                </span>
+                <button onClick={disconnectSpotify} title="Odłącz konto Spotify"
+                  style={{ padding:'5px 9px', border:'1px solid #dc2626', background:'#fee2e2', color:'#dc2626', borderRadius:8, fontSize:12, cursor:'pointer' }}>
+                  Odłącz
+                </button>
+              </div>
             ) : (
-              <button onClick={connectSpotify} title="Połącz konto Spotify"
-                style={{ padding:'6px 10px', border:'1px solid #1DB954', background:'#1DB954', color:'#fff', borderRadius:8 }}>
-                {connecting ? 'Łączenie…' : 'Spotify'}
+              <button onClick={connectSpotify} disabled={connecting} title="Połącz konto Spotify"
+                style={{ 
+                  padding:'7px 14px', 
+                  border:'1px solid #1DB954', 
+                  background:'#1DB954', 
+                  color:'#fff', 
+                  borderRadius:8,
+                  cursor: connecting ? 'wait' : 'pointer',
+                  fontSize:14,
+                  fontWeight:500
+                }}>
+                {connecting ? 'Łączenie…' : 'Połącz Spotify'}
               </button>
             )}
-            <button onClick={logout} style={{ padding:'6px 10px', border:'1px solid #d1d5db', borderRadius:8, background:'#f5f5f5' }}>
+            <button onClick={logout} style={{ padding:'6px 10px', border:'1px solid #d1d5db', borderRadius:8, background:'#f5f5f5', fontSize:14 }}>
               Wyloguj
             </button>
           </div>
         </div>
 
-        {/* === reszta UI (import, dopasowanie, chmura) — jak w Twojej wersji === */}
         <div style={{ marginBottom:12 }}>
           <button onClick={()=>setTab('import')} style={{ padding:'6px 10px', marginRight:8, background:tab==='import'?'#222':'#eee', color:tab==='import'?'#fff':'#000', border:'1px solid #ccc', borderRadius:6 }}>
             Import i dopasowanie
