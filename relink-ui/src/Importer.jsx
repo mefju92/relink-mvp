@@ -36,6 +36,7 @@ export default function Importer({ apiBase }) {
 
   const [cloudLoading, setCloudLoading] = useState(false)
   const [cloudFiles, setCloudFiles] = useState([])
+  const [cloudSelected, setCloudSelected] = useState(new Set())
 
   const [spName, setSpName] = useState(null)
   const [flash, setFlash] = useState(null)
@@ -106,90 +107,88 @@ export default function Importer({ apiBase }) {
   }
 
   async function scanAndMatch() {
-  if (!files.length) return alert('Najpierw dodaj pliki.')
-  setScanning(true)
-  setMatched([])
-  setSelected(new Set())
-  setScanProgress(0)
-  
-  try {
-    const payload = {
-      tracks: files.map(f => ({
-        title: cleanTitle(f.title || f.name),
-        artist: cleanArtist(f.artist || ''),
-        durationMs: f.durationMs || 0,
-      })),
-    }
+    if (!files.length) return alert('Najpierw dodaj pliki.')
+    setScanning(true)
+    setMatched([])
+    setSelected(new Set())
+    setScanProgress(0)
     
-    // Start job
-    const res = await fetch(`${apiBase}/api/match`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
-      body: JSON.stringify(payload),
-    })
-    const data = await safeJson(res)
-    
-    if (!data.ok) {
-      if (data.code === 'NO_LINK') {
-        alert('Nie połączono ze Spotify.')
-        return
+    try {
+      const payload = {
+        tracks: files.map(f => ({
+          title: cleanTitle(f.title || f.name),
+          artist: cleanArtist(f.artist || ''),
+          durationMs: f.durationMs || 0,
+        })),
       }
-      throw new Error(data.error || 'match failed')
-    }
-    
-    // Poll progress
-    const pollInterval = setInterval(async () => {
-      try {
-        const progressRes = await fetch(`${apiBase}/api/match/progress`, {
-          headers: { ...(await authHeaders()) }
-        })
-        const progressData = await safeJson(progressRes)
-        
-        if (!progressData.exists) {
-          clearInterval(pollInterval)
+      
+      const res = await fetch(`${apiBase}/api/match`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+        body: JSON.stringify(payload),
+      })
+      const data = await safeJson(res)
+      
+      if (!data.ok) {
+        if (data.code === 'NO_LINK') {
+          alert('Nie połączono ze Spotify.')
           return
         }
-        
-        if (progressData.current && progressData.total) {
-          const percent = Math.round((progressData.current / progressData.total) * 100)
-          setScanProgress(percent)
-        }
-        
-        if (progressData.done) {
+        throw new Error(data.error || 'match failed')
+      }
+      
+      const pollInterval = setInterval(async () => {
+        try {
+          const progressRes = await fetch(`${apiBase}/api/match/progress`, {
+            headers: { ...(await authHeaders()) }
+          })
+          const progressData = await safeJson(progressRes)
+          
+          if (!progressData.exists) {
+            clearInterval(pollInterval)
+            return
+          }
+          
+          if (progressData.current && progressData.total) {
+            const percent = Math.round((progressData.current / progressData.total) * 100)
+            setScanProgress(percent)
+          }
+          
+          if (progressData.done) {
+            clearInterval(pollInterval)
+            
+            if (progressData.error) {
+              throw new Error(progressData.error)
+            }
+            
+            if (progressData.results) {
+              setMatched(progressData.results.results || [])
+              const matchCount = progressData.results.results.filter(m => m.matched).length
+              const totalCount = progressData.results.results.filter(m => !m.isDuplicate).length
+              setFlash({ 
+                type: 'ok', 
+                text: `Dopasowano ${matchCount}/${totalCount} utworów (próg: ${progressData.results.threshold})` 
+              })
+              setTimeout(() => setFlash(null), 5000)
+            }
+            
+            setScanning(false)
+            setScanProgress(0)
+          }
+        } catch (e) {
           clearInterval(pollInterval)
-          
-          if (progressData.error) {
-            throw new Error(progressData.error)
-          }
-          
-          if (progressData.results) {
-            setMatched(progressData.results.results || [])
-            const matchCount = progressData.results.results.filter(m => m.matched).length
-            const totalCount = progressData.results.results.filter(m => !m.isDuplicate).length
-            setFlash({ 
-              type: 'ok', 
-              text: `Dopasowano ${matchCount}/${totalCount} utworów (próg: ${progressData.results.threshold})` 
-            })
-            setTimeout(() => setFlash(null), 5000)
-          }
-          
+          alert('Błąd sprawdzania progressu: ' + e.message)
           setScanning(false)
           setScanProgress(0)
         }
-      } catch (e) {
-        clearInterval(pollInterval)
-        alert('Błąd sprawdzania progressu: ' + e.message)
-        setScanning(false)
-        setScanProgress(0)
-      }
-    }, 500) // co 0.5s
-    
-  } catch (e) {
-    alert('Błąd dopasowania: ' + e.message)
-    setScanning(false)
-    setScanProgress(0)
+      }, 500)
+      
+    } catch (e) {
+      alert('Błąd dopasowania: ' + e.message)
+      setScanning(false)
+      setScanProgress(0)
+    }
   }
-}
 
   async function createPlaylist() {
     const indices = [...selected]
@@ -247,6 +246,39 @@ export default function Importer({ apiBase }) {
     setFiles(prev => prev.filter((_, i) => !indices.includes(i)))
     setMatched(prev => prev.filter((_, i) => !indices.includes(i)))
     setSelected(new Set())
+  }
+
+  async function deleteCloudFiles() {
+    if (!cloudSelected.size) return alert('Zaznacz pliki do usunięcia.')
+    if (!confirm(`Usunąć ${cloudSelected.size} ${cloudSelected.size === 1 ? 'plik' : 'plików'} z chmury?`)) return
+    
+    try {
+      const filenames = [...cloudSelected].map(idx => cloudFiles[idx].name)
+      
+      const res = await fetch(`${apiBase}/api/cloud/delete`, {
+        method: 'DELETE',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(await authHeaders()) 
+        },
+        body: JSON.stringify({ filenames }),
+      })
+      
+      const data = await safeJson(res)
+      
+      if (!data.ok) throw new Error(data.error || 'delete failed')
+      
+      setFlash({ 
+        type: 'ok', 
+        text: `Usunięto ${data.deleted} ${data.deleted === 1 ? 'plik' : 'plików'}${data.failed > 0 ? `, błędy: ${data.failed}` : ''}` 
+      })
+      setTimeout(() => setFlash(null), 4000)
+      
+      setCloudSelected(new Set())
+      await loadCloud()
+    } catch (e) {
+      alert('Błąd usuwania: ' + e.message)
+    }
   }
 
   async function loadCloud() {
@@ -332,6 +364,15 @@ export default function Importer({ apiBase }) {
       if (!m.isDuplicate) all.add(i)
     })
     setSelected(all)
+  }
+
+  function selectAllCloud() {
+    const all = new Set(cloudFiles.map((_, i) => i))
+    setCloudSelected(all)
+  }
+
+  function deselectAllCloud() {
+    setCloudSelected(new Set())
   }
 
   return (
@@ -546,30 +587,90 @@ export default function Importer({ apiBase }) {
               <button onClick={loadCloud} disabled={cloudLoading} style={{ padding:'4px 10px' }}>
                 {cloudLoading ? 'Odświeżam…' : 'Odśwież'}
               </button>
+              
+              {cloudFiles.length > 0 && (
+                <>
+                  <button 
+                    onClick={selectAllCloud} 
+                    style={{ 
+                      padding:'4px 10px', 
+                      fontSize:13, 
+                      border:'1px solid #6b7280', 
+                      background:'#f9fafb', 
+                      borderRadius:6 
+                    }}>
+                    Zaznacz wszystkie
+                    </button>
+                  <button 
+                    onClick={deselectAllCloud} 
+                    style={{ 
+                      padding:'4px 10px', 
+                      fontSize:13, 
+                      border:'1px solid #6b7280', 
+                      background:'#f9fafb', 
+                      borderRadius:6 
+                    }}>
+                    Odznacz wszystkie
+                  </button>
+                  <button 
+                    onClick={deleteCloudFiles} 
+                    disabled={!cloudSelected.size}
+                    style={{ 
+                      padding:'6px 12px', 
+                      fontSize:13, 
+                      fontWeight:500,
+                      border:'1px solid #dc2626', 
+                      background: cloudSelected.size ? '#dc2626' : '#fee2e2', 
+                      color: cloudSelected.size ? '#fff' : '#dc2626',
+                      borderRadius:6,
+                      cursor: cloudSelected.size ? 'pointer' : 'not-allowed'
+                    }}>
+                    Usuń ({cloudSelected.size})
+                  </button>
+                </>
+              )}
             </div>
 
             <table width="100%" cellPadding={6} style={{ borderCollapse:'collapse' }}>
               <thead style={{ background:'#f5f5f5' }}>
                 <tr>
+                  <th style={{ textAlign:'center', width:40 }}>Zaznacz</th>
                   <th style={{ textAlign:'left' }}>Nazwa</th>
                   <th style={{ textAlign:'left' }}>Rozmiar</th>
                   <th style={{ textAlign:'left' }}>Podgląd / Pobierz</th>
                 </tr>
               </thead>
               <tbody>
-                {cloudFiles.map((f,idx)=>(
-                  <tr key={idx} style={{ borderTop:'1px solid #eee' }}>
-                    <td>{f.name}</td>
-                    <td>{bytes(f.size)}</td>
-                    <td>
-                      <audio src={f.url} controls preload="none" style={{ width:280 }} />
-                      {' '}
-                      <a href={f.url} download target="_blank" rel="noreferrer">Pobierz</a>
-                    </td>
-                  </tr>
-                ))}
+                {cloudFiles.map((f,idx)=>{
+                  const checked = cloudSelected.has(idx)
+                  return (
+                    <tr key={idx} style={{ borderTop:'1px solid #eee', background: checked ? '#f0f9ff' : 'transparent' }}>
+                      <td style={{ textAlign:'center' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={checked} 
+                          onChange={e=>{
+                            setCloudSelected(prev=>{
+                              const next = new Set(prev)
+                              if(e.target.checked) next.add(idx)
+                              else next.delete(idx)
+                              return next
+                            })
+                          }}
+                        />
+                      </td>
+                      <td>{f.name}</td>
+                      <td>{bytes(f.size)}</td>
+                      <td>
+                        <audio src={f.url} controls preload="none" style={{ width:280 }} />
+                        {' '}
+                        <a href={f.url} download target="_blank" rel="noreferrer">Pobierz</a>
+                      </td>
+                    </tr>
+                  )
+                })}
                 {!cloudFiles.length && (
-                  <tr><td colSpan={3} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
+                  <tr><td colSpan={4} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
                     Brak plików
                   </td></tr>
                 )}

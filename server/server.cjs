@@ -525,9 +525,7 @@ app.post('/api/match', requireAuth, async (req, res) => {
               duplicates, matched: false, isDuplicate: false
             });
           }
-          for (let i = 0; i < duplicates; i++) {
-            out.push({ spotifyId: null, spotifyUrl: null, name: null, artists: null, score: 0, duplicates: 0, matched: false, isDuplicate: true });
-          }
+          
         }
         
         // Zapisz wyniki
@@ -729,6 +727,41 @@ app.post('/api/upload', requireAuth, upload.array('files', 50), async (req, res)
       return { name: file.originalname, ok: !error, error: error?.message };
     }));
     res.json({ ok: true, files: results });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.delete('/api/cloud/delete', requireAuth, async (req, res) => {
+  try {
+    const { filenames = [] } = req.body;
+    
+    if (!Array.isArray(filenames) || filenames.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Brak plików do usunięcia' });
+    }
+
+    const prefix = `${req.user.id}/`;
+    const results = await Promise.all(
+      filenames.map(async (filename) => {
+        const path = prefix + filename;
+        const { error } = await supa.storage.from(SUPABASE_BUCKET).remove([path]);
+        return { 
+          name: filename, 
+          ok: !error, 
+          error: error?.message 
+        };
+      })
+    );
+
+    const deleted = results.filter(r => r.ok).length;
+    const failed = results.filter(r => !r.ok);
+
+    res.json({ 
+      ok: true, 
+      deleted, 
+      failed: failed.length,
+      results 
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
