@@ -197,19 +197,39 @@ function scoreCandidate(local, sp) {
 
 // NOWE: Budowanie wielu wariantów zapytań
 function buildSearchQueries(track) {
-  const title = coreTitle(track.title || '');
-  const artist = normArtist(track.artist || '');
+  let title = coreTitle(track.title || '');
+  let artist = normArtist(track.artist || '');
   const artists = splitArtists(track.artist || '');
   
+  // NOWE: Usuń label/wydawcę z końca tytułu (np. "- Guesthouse Music")
+  title = title.replace(/\s*-\s*(music|records|recordings|label|entertainment)$/i, '').trim();
+  
+  // NOWE: Wyciągnij feat/ft z tytułu do artysty
+  const featMatch = title.match(/\b(?:feat\.?|ft\.?|featuring)\s+([^()]+?)(?:\)|$)/i);
+  if (featMatch && artists.length === 1) {
+    const featArtist = featMatch[1].trim();
+    artists.push(featArtist);
+    // Usuń feat z tytułu
+    title = title.replace(/\s*[\(\[]?\s*(?:feat\.?|ft\.?|featuring)\s+[^()\]]+[\)\]]?/gi, '').trim();
+  }
+  
   // Wykryj czy to remix/edit
-  const hasRemix = /\b(remix|edit|mix|bootleg|mashup|vip)\b/i.test(track.title || '');
+  const hasRemix = /\b(remix|edit|mix|bootleg|mashup|vip)\b/i.test(title);
   const titleNoRemix = title.replace(/\b(remix|edit|mix|bootleg|mashup|vip)\b/gi, '').trim();
+  
+  // Warianty z nawiasami i bez
+  const titleNoBrackets = title.replace(/\s*[\(\[].*?[\)\]]\s*/g, ' ').replace(/\s+/g, ' ').trim();
   
   const queries = [];
   
-  // Zapytanie podstawowe
+  // Zapytanie podstawowe z pełnym tytułem
   if (artist && title) {
     queries.push(`${artist} ${title}`);
+  }
+  
+  // Bez nawiasów (często usuwa problematyczne "Radio Mix" itp)
+  if (titleNoBrackets !== title && artist && titleNoBrackets) {
+    queries.push(`${artist} ${titleNoBrackets}`);
   }
   
   // Tylko tytuł (gdy artist może być błędny z YouTube)
@@ -217,9 +237,13 @@ function buildSearchQueries(track) {
     queries.push(title);
   }
   
-  // Z wieloma artystami
+  // Z wieloma artystami (np. "Calvin Harris Alesso Under Control")
   if (artists.length > 1 && title) {
     queries.push(`${artists[0]} ${artists[1]} ${title}`);
+    // Też bez nawiasów
+    if (titleNoBrackets !== title && titleNoBrackets) {
+      queries.push(`${artists[0]} ${artists[1]} ${titleNoBrackets}`);
+    }
   }
   
   // Wariant bez remix/edit (może znajdzie oryginał)
@@ -227,8 +251,13 @@ function buildSearchQueries(track) {
     queries.push(`${artist} ${titleNoRemix}`);
   }
   
-  // Deduplikuj i ogranicz do 4 zapytań
-  return [...new Set(queries)].slice(0, 4);
+  // Kwalifikatory Spotify (track:"..." artist:"...")
+  if (artist && title) {
+    queries.push(`track:"${titleNoBrackets || title}" artist:"${artists[0]}"`);
+  }
+  
+  // Deduplikuj i ogranicz do 6 zapytań
+  return [...new Set(queries.filter(Boolean))].slice(0, 6);
 }
 
 async function spotifySearch(q, userAccessToken, limit = 5) {

@@ -87,48 +87,65 @@ function artistOverlap(localArtists, spotifyArtists) {
 
 /* === ULEPSZONE: Składanie zapytań do wyszukiwania === */
 function buildQueries(artistRaw, titleRaw) {
+  let title = coreTitle(titleRaw);
   const artists = splitArtists(artistRaw);
-  const t = norm(titleRaw);
-  const tCore = coreTitle(t);
-
-  // wersje bez „feat …" w tytule
-  const tNoFeat = tCore.replace(/\bfeat\.?.*$/i, '').trim();
+  
+  // NOWE: Usuń label/wydawcę z końca tytułu
+  title = title.replace(/\s*-\s*(music|records|recordings|label|entertainment)$/i, '').trim();
+  
+  // NOWE: Wyciągnij feat/ft z tytułu do artystów
+  const featMatch = title.match(/\b(?:feat\.?|ft\.?|featuring)\s+([^()]+?)(?:\)|$)/i);
+  if (featMatch && artists.length === 1) {
+    const featArtist = featMatch[1].trim();
+    artists.push(featArtist);
+    title = title.replace(/\s*[\(\[]?\s*(?:feat\.?|ft\.?|featuring)\s+[^()\]]+[\)\]]?/gi, '').trim();
+  }
   
   // wykryj remix/edit
-  const hasRemix = /\b(remix|edit|mix)\b/i.test(tCore);
-  const tNoRemix = tCore.replace(/\b(remix|edit|mix|bootleg|mashup|vip)\b/gi, '').trim();
+  const hasRemix = /\b(remix|edit|mix)\b/i.test(title);
+  const titleNoRemix = title.replace(/\b(remix|edit|mix|bootleg|mashup|vip)\b/gi, '').trim();
+  
+  // Warianty z nawiasami i bez
+  const titleNoBrackets = title.replace(/\s*[\(\[].*?[\)\]]\s*/g, ' ').replace(/\s+/g, ' ').trim();
 
   const variants = [];
   
-  // Z głównym artystą
-  if (artists.length > 0 && tCore) {
-    variants.push(`${artists[0]} ${tCore}`);
-    variants.push(`${artists[0]} ${tNoFeat}`);
-    variants.push(`track:"${tCore}" artist:"${artists[0]}"`);
+  // Z głównym artystą - pełny tytuł i bez nawiasów
+  if (artists.length > 0 && title) {
+    variants.push(`${artists[0]} ${title}`);
+    if (titleNoBrackets !== title) {
+      variants.push(`${artists[0]} ${titleNoBrackets}`);
+    }
+    variants.push(`track:"${titleNoBrackets || title}" artist:"${artists[0]}"`);
   }
   
   // Z wieloma artystami
-  if (artists.length > 1 && tCore) {
-    variants.push(`${artists[0]} ${artists[1]} ${tCore}`);
-    variants.push(`artist:"${artists[0]}" artist:"${artists[1]}" track:"${tCore}"`);
+  if (artists.length > 1 && title) {
+    variants.push(`${artists[0]} ${artists[1]} ${title}`);
+    if (titleNoBrackets !== title) {
+      variants.push(`${artists[0]} ${artists[1]} ${titleNoBrackets}`);
+    }
+    variants.push(`artist:"${artists[0]}" artist:"${artists[1]}" track:"${titleNoBrackets || title}"`);
   }
   
-  // Samo tytuł (gdy artysta może być błędny)
-  if (tCore) {
-    variants.push(`${tCore}`);
-    variants.push(`"${tCore}"`);
+  // Samo tytuł
+  if (title) {
+    variants.push(`${title}`);
+    if (titleNoBrackets !== title) {
+      variants.push(`${titleNoBrackets}`);
+    }
   }
   
   // Wariant bez remix/edit
-  if (hasRemix && tNoRemix && artists.length > 0) {
-    variants.push(`${artists[0]} ${tNoRemix}`);
+  if (hasRemix && titleNoRemix && artists.length > 0) {
+    variants.push(`${artists[0]} ${titleNoRemix}`);
   }
 
   return _.uniq(
     variants
       .map((q) => q.replace(/\s{2,}/g, ' ').trim())
       .filter(Boolean)
-  ).slice(0, 8); // max 8 zapytań
+  ).slice(0, 10); // zwiększone do 10 wariantów
 }
 
 /* === Scoring kandydatów === */
