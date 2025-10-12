@@ -512,69 +512,97 @@ export default function Importer({ apiBase }) {
                     <th style={{ textAlign:'center', width:60 }}>Zaznacz</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {files.map((f,i)=>{
-                    const m = matched[i]
-                    if (m?.isDuplicate) {
-                      return (
-                        <tr key={i} style={{ borderTop:'1px solid #eee', background:'#fafafa' }}>
-                          <td style={{ textAlign:'center' }}>
-                            <span style={{ color:'#999', fontSize:18 }}>⊗</span>
-                          </td>
-                          <td colSpan={4} style={{ color:'#999', fontSize:12, fontStyle:'italic' }}>
-                            {f.name} <span style={{ color:'#f59e0b' }}>(duplikat - pominięto)</span>
-                          </td>
-                        </tr>
-                      )
-                    }
-                    
-                    const isMatched = m?.matched
-                    const checked = selected.has(i)
-                    
-                    return (
-                      <tr key={i} style={{ borderTop:'1px solid #eee' }}>
-                        <td style={{ textAlign:'center' }}>
-                          <span style={{ fontSize:20 }}>{isMatched ? '🟢' : '🟡'}</span>
-                        </td>
-                        <td style={{ fontSize:13 }}>{f.name}</td>
-                        <td style={{ fontSize:13 }}>{f.artist || '-'}</td>
-                        <td style={{ fontSize:13 }}>
-                          {m?.spotifyUrl ? (
-                            <a href={m.spotifyUrl} target="_blank" rel="noreferrer">
-                              {m.name} — {m.artists}
-                            </a>
-                          ) : (
-                            <span style={{ color:'#999' }}>Brak dopasowania</span>
-                          )}
-                          {m?.duplicates > 0 && (
-                            <span style={{ marginLeft:6, fontSize:11, color:'#f59e0b' }}>
-                              (+{m.duplicates} {m.duplicates === 1 ? 'kopia' : 'kopii'})
-                            </span>
-                          )}
-                        </td>
-                        <td style={{ textAlign:'center' }}>
-                          <input 
-                            type="checkbox" 
-                            checked={checked} 
-                            onChange={e=>{
-                              setSelected(prev=>{
-                                const next=new Set(prev)
-                                if(e.target.checked) next.add(i)
-                                else next.delete(i)
-                                return next
-                              })
-                            }}
-                          />
-                        </td>
-                      </tr>
-                    )
-                  })}
-                  {!files.length && (
-                    <tr><td colSpan={5} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
-                      Dodaj pliki by rozpocząć
-                    </td></tr>
-                  )}
-                </tbody>
+                // ZASTĄP sekcję renderowania tabeli (od <tbody> do </tbody>) tym kodem:
+
+<tbody>
+  {matched.length > 0 ? (
+    matched.map((m, i) => {
+      const f = files[i]; // <<< kluczowe: 1:1 z wynikami
+
+      if (m?.isDuplicate) {
+        // Wiersz duplikatu – pokaż nazwę pliku i informację, że pominięto
+        return (
+          <tr key={i} style={{ borderTop:'1px solid #eee', background:'#fafafa' }}>
+            <td style={{ textAlign:'center' }}>
+              <span style={{ color:'#999', fontSize:18 }}>⊗</span>
+            </td>
+            <td style={{ fontSize:13, color:'#999' }}>{f?.name || '-'}</td>
+            <td style={{ fontSize:13, color:'#999' }}>{f?.artist || '-'}</td>
+            <td colSpan={1} style={{ color:'#999', fontSize:12, fontStyle:'italic' }}>
+              (duplikat — pominięto)
+            </td>
+            <td style={{ textAlign:'center' }}>
+              <input type="checkbox" disabled style={{ opacity: 0.3 }} />
+            </td>
+          </tr>
+        )
+      }
+
+      const isMatched = m?.matched
+      const checked = selected.has(i)
+
+      return (
+        <tr key={i} style={{ borderTop:'1px solid #eee' }}>
+          <td style={{ textAlign:'center' }}>
+            <span style={{ fontSize:20 }}>{isMatched ? '🟢' : '🟡'}</span>
+          </td>
+          <td style={{ fontSize:13 }}>{f?.name || '?'}</td>
+          <td style={{ fontSize:13 }}>{f?.artist || '-'}</td>
+          <td style={{ fontSize:13 }}>
+            {m?.spotifyUrl ? (
+              <a href={m.spotifyUrl} target="_blank" rel="noreferrer">
+                {m.name} — {m.artists}
+              </a>
+            ) : (
+              <span style={{ color:'#999' }}>Brak dopasowania</span>
+            )}
+            {m?.duplicates > 0 && (
+              <span style={{ marginLeft:6, fontSize:11, color:'#f59e0b' }}>
+                (+{m.duplicates} {m.duplicates === 1 ? 'kopia' : 'kopii'})
+              </span>
+            )}
+          </td>
+          <td style={{ textAlign:'center' }}>
+            <input 
+              type="checkbox" 
+              checked={checked} 
+              onChange={e=>{
+                setSelected(prev=>{
+                  const next=new Set(prev)
+                  if(e.target.checked) next.add(i)
+                  else next.delete(i)
+                  return next
+                })
+              }}
+            />
+          </td>
+        </tr>
+      )
+    })
+  ) : (
+    files.map((f,i)=>(
+      <tr key={i} style={{ borderTop:'1px solid #eee' }}>
+        <td style={{ textAlign:'center' }}>
+          <span style={{ fontSize:20 }}>⚪</span>
+        </td>
+        <td style={{ fontSize:13 }}>{f.name}</td>
+        <td style={{ fontSize:13 }}>{f.artist || '-'}</td>
+        <td style={{ fontSize:13, color:'#999' }}>
+          Kliknij "Skanuj i dopasuj"
+        </td>
+        <td style={{ textAlign:'center' }}>
+          <input type="checkbox" disabled style={{ opacity: 0.3 }} />
+        </td>
+      </tr>
+    ))
+  )}
+  {!files.length && (
+    <tr><td colSpan={5} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
+      Dodaj pliki by rozpocząć
+    </td></tr>
+  )}
+</tbody>
+
               </table>
             </div>
           </>
