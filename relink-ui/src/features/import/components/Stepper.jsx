@@ -1,32 +1,28 @@
+// relink-ui/src/features/import/components/Stepper.jsx
 // @ts-check
-/** @typedef {{ steps: string[], current: number }} StepperProps */
-/** @param {StepperProps} props */
-export default function Stepper({ steps = [], current = 0 }) { /* ... */ }
 
+export default function Stepper({ steps = [], current = 0 }) {
   return (
     <nav aria-label="Steps" className="hidden md:flex items-center gap-3 text-sm">
       {steps.map((s, i) => {
         const state = i < current ? "done" : i === current ? "active" : "next";
+        const textCls = state === "active" ? "text-slate-900" : "text-slate-500";
+        const badgeCls =
+          state === "done"
+            ? "bg-emerald-600 text-white border-emerald-600"
+            : state === "active"
+            ? "border-slate-400"
+            : "border-slate-300 text-slate-500";
+
         return (
-          <div key={s} className="flex items-center gap-3">
-            <div
-              className={`flex items-center gap-2 ${state === "active" ? "text-slate-900" : "text-slate-500"}`}
-              {...(state === "active" ? { "aria-current": "step" } : {})}
-            >
-              <span
-                className={`grid h-6 w-6 place-items-center rounded-full border ${
-                  state === "done"
-                    ? "bg-emerald-600 text-white border-emerald-600"
-                    : state === "active"
-                    ? "border-slate-400"
-                    : "border-slate-300 text-slate-500"
-                }`}
-              >
+          <div key={`${i}-${s}`} className="flex items-center gap-3">
+            <div className={`flex items-center gap-2 ${textCls}`} aria-current={state === "active" ? "step" : undefined}>
+              <span className={`grid h-6 w-6 place-items-center rounded-full border ${badgeCls}`}>
                 {state === "done" ? <CheckIcon /> : i + 1}
               </span>
               <span className="font-semibold">{s}</span>
             </div>
-            {i < steps.length - 1 && <span className="w-8 border-t border-dashed border-slate-300" />}
+            {i < steps.length - 1 ? <span className="w-8 border-t border-dashed border-slate-300" /> : null}
           </div>
         );
       })}
