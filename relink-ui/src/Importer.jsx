@@ -512,7 +512,7 @@ export default function Importer({ apiBase }) {
                     <th style={{ textAlign:'center', width:60 }}>Zaznacz</th>
                   </tr>
                 </thead>
-                // ZASTĄP sekcję renderowania tabeli (od <tbody> do </tbody>) tym kodem:
+                
 
 <tbody>
   {matched.length > 0 ? (
