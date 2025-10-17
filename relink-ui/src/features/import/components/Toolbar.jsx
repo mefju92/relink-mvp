@@ -23,7 +23,7 @@ export default function Toolbar({
   filter = "all",
   onFilterChange = () => {},
   onSortClick = () => {},
-  onSelectAll = () => {},
+  onSelectAll = () => {},        // ✅ poprawka: brak odwołania do zewn. funkcji
 }) {
   const items = [
     `All (${counts.total ?? 0})`,
@@ -57,13 +57,24 @@ export default function Toolbar({
 
       {/* Sort */}
       <div className="relative">
-        <button className="btn btn-neutral" aria-haspopup="listbox" aria-expanded="false" onClick={onSortClick}>
+        <button
+          type="button"
+          className="btn btn-neutral"
+          aria-haspopup="listbox"
+          aria-expanded="false"
+          onClick={onSortClick}
+        >
           Sort: Title <ChevronDown />
         </button>
       </div>
 
       {/* Select all (filtered) */}
-      <button className="btn btn-neutral" aria-label="Select all (filtered)" onClick={onSelectAll}>
+      <button
+        type="button"
+        className="btn btn-neutral"
+        aria-label="Select all (filtered)"
+        onClick={onSelectAll}
+      >
         Select all
       </button>
     </div>
@@ -77,6 +88,7 @@ function SegmentedControl({ items = [], activeIndex = 0, onChange = () => {} }) 
       {items.map((it, idx) => (
         <button
           key={it}
+          type="button"                 // ✅
           role="tab"
           aria-pressed={idx === activeIndex}
           className="px-3"

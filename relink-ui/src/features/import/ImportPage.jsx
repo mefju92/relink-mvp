@@ -1,3 +1,4 @@
+// relink-ui/src/features/import/ImportPage.jsx
 // @ts-check
 /** @typedef {import("../../types").TrackRow} TrackRow */
 /** @typedef {import("../../types").FilterKey} FilterKey */
@@ -16,6 +17,8 @@ export default function ImportPage() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("title");
+
+  // demo data
   useEffect(() => {
     setRows([
       { id: "1", status: "warn", title: "Lights Out (Original Mix).mp3", artist: "4 Strings", album: "Lights Out", time: "4:32", spotifyUrl: "", added: false },
@@ -23,6 +26,7 @@ export default function ImportPage() {
     ]);
   }, []);
 
+  // filter + sort
   const filtered = useMemo(() => {
     let list = rows;
     if (query) {
@@ -35,10 +39,14 @@ export default function ImportPage() {
     }
     if (filter === "matched") list = list.filter((r) => r.status === "ok");
     if (filter === "unmatched") list = list.filter((r) => r.status === "warn");
-    list = [...list].sort((a, b) => String(a?.[sort] ?? "").localeCompare(String(b?.[sort] ?? "")));
+
+    list = [...list].sort((a, b) =>
+      String(a?.[sort] ?? "").localeCompare(String(b?.[sort] ?? ""))
+    );
     return list;
   }, [rows, query, filter, sort]);
 
+  // counts
   const counts = useMemo(() => ({
     total: rows.length,
     matched: rows.filter((r) => r.status === "ok").length,
@@ -48,15 +56,49 @@ export default function ImportPage() {
 
   const allSelected = filtered.length > 0 && filtered.every((r) => r.added);
 
-  function toggleRow(id, val)   { setRows((prev) => prev.map((r) => (r.id === id ? { ...r, added: val } : r))); }
-  function toggleAll(val)       { setRows((prev) => prev.map((r) => ({ ...r, added: val }))); }
-  async function uploadToCloud(){ /* ... jak masz ... */ }
-  async function deleteSelected(){
+  // selection helpers
+  function toggleRow(id, val) {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, added: val } : r)));
+  }
+  function toggleAll(val) {
+    setRows((prev) => prev.map((r) => ({ ...r, added: val })));
+  }
+  function toggleAllOnFiltered(val) {
+    const ids = new Set(filtered.map((r) => r.id));
+    setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, added: val } : r)));
+  }
+
+  // actions
+  async function uploadToCloud() {
     const ids = rows.filter((r) => r.added).map((r) => r.id);
-    await fetch(`${API}/files`, { method:"DELETE", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ ids }) });
+    if (!ids.length) return;
+    await fetch(`${API}/cloud/upload`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  async function deleteSelected() {
+    const ids = rows.filter((r) => r.added).map((r) => r.id);
+    if (!ids.length) return;
+    await fetch(`${API}/files`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
     setRows((prev) => prev.filter((r) => !r.added));
   }
-  async function createPlaylist(name){ /* ... jak masz ... */ }
+
+  async function createPlaylist(name) {
+    const ids = rows.filter((r) => r.added).map((r) => r.id);
+    if (!ids.length) return;
+    await fetch(`${API}/playlist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, ids }),
+    });
+  }
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-900">
@@ -78,14 +120,14 @@ export default function ImportPage() {
               filter={filter}
               onFilterChange={setFilter}
               onSortClick={() => setSort("title")}
-              onSelectAll={() => toggleAll(true)}
+              onSelectAll={() => toggleAllOnFiltered(true)}
             />
           </div>
 
           <DataTable
             rows={filtered}
             onToggleRow={toggleRow}
-            onToggleAll={toggleAll}
+            onToggleAll={toggleAllOnFiltered}  // zaznaczanie dla przefiltrowanych
             allSelected={allSelected}
           />
 

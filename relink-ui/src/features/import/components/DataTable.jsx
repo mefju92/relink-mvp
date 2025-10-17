@@ -1,23 +1,37 @@
+// relink-ui/src/features/import/components/DataTable.jsx
 // @ts-check
+import { useEffect, useRef, useState } from "react";
 /** @typedef {import("../../../types").TrackRow} TrackRow */
 
 /**
- * @param {{ rows: TrackRow[], onToggleRow:(id:string,val:boolean)=>void, onToggleAll:(val:boolean)=>void, allSelected:boolean }} props
+ * @typedef {{
+ *   rows: TrackRow[],
+ *   onToggleRow: (id: string, val: boolean) => void,
+ *   onToggleAll: (val: boolean) => void,
+ *   allSelected: boolean
+ * }} Props
  */
 
+/** @param {Props} props */
+export default function DataTable({ rows = [], onToggleRow, onToggleAll, allSelected = false }) {
+  // --- sticky header shadow ---
+  const wrapRef = useRef(null);
+  const [stuck, setStuck] = useState(false);
 
-export default function DataTable({
-  rows = [],
-  onToggleRow,
-  onToggleAll,
-  allSelected = false,
-}) {
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const onScroll = () => setStuck(el.scrollTop > 0);
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
   return (
-    <div className="relative overflow-auto">
+    <div ref={wrapRef} className="relative overflow-auto">
       <table className="table">
         <thead>
           <tr className="row">
-            <th className="th sticky-left w-[56px] px-4 text-left">
+            <th className={`th sticky-left w-[56px] px-4 text-left ${stuck ? "shadow-stuck" : ""}`}>
               <label className="inline-flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -28,13 +42,15 @@ export default function DataTable({
                 />
               </label>
             </th>
-            <th className="th w-[160px] text-left px-3">Status</th>
-            <th className="th text-left px-3">Title</th>
-            <th className="th w-[220px] text-left px-3">Artist</th>
-            <th className="th w-[220px] text-left px-3">Album</th>
-            <th className="th w-[90px] text-left px-3">Length</th>
-            <th className="th w-[180px] text-left px-3">Spotify</th>
-            <th className="th sticky-right w-[140px] text-left px-4">Add to playlist</th>
+            <th className={`th w-[160px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Status</th>
+            <th className={`th text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Title</th>
+            <th className={`th w-[220px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Artist</th>
+            <th className={`th w-[220px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Album</th>
+            <th className={`th w-[90px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Length</th>
+            <th className={`th w-[180px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Spotify</th>
+            <th className={`th sticky-right w-[140px] text-left px-4 ${stuck ? "shadow-stuck" : ""}`}>
+              Add to playlist
+            </th>
           </tr>
         </thead>
 
@@ -83,7 +99,7 @@ export default function DataTable({
               </td>
 
               <td className="td sticky-right px-4">
-                {/* wizualny switch tylko do podglądu stanu; realna selekcja jest checkboxem po lewej */}
+                {/* wizualny switch; realna selekcja to checkbox po lewej */}
                 <label className="switch" aria-hidden>
                   <input type="checkbox" checked={!!r.added} readOnly />
                   <span className="sw-track"><span className="sw-thumb" /></span>
@@ -97,7 +113,7 @@ export default function DataTable({
   );
 }
 
-/* ——— Ikony (proste, wbudowane) ——— */
+/* ——— Ikony ——— */
 function WarnIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" className="text-[var(--warning-text)]" fill="currentColor">
