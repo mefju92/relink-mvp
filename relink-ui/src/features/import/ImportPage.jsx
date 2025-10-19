@@ -27,23 +27,39 @@ const [sort, setSort]     = useState(/** @type {SortKey} */("title"));
   function openFiles()  { filesRef.current?.click(); }
   function openFolder() { folderRef.current?.click(); }
 
-  function toRow(file) {
-    const id = typeof crypto?.randomUUID === "function"
-      ? crypto.randomUUID()
-      : String(Date.now() + Math.random());
-    return /** @type {TrackRow} */ ({
-      id, status: "warn", title: file.name, artist: "", album: "", time: "", spotifyUrl: "", added: false,
-    });
-  }
+// usuń całą funkcję toRow(...) – nie będzie już potrzebna
 
-  /** @param {React.ChangeEvent<HTMLInputElement>} ev */
-  function onFilesSelected(ev) {
-    const input = ev.target;
-    const files = Array.from(input?.files || []);
-    if (!files.length) return;
-    setRows(prev => [...prev, ...files.map(toRow)]);
-    input.value = ""; // reset
-  }
+/** @param {import('react').ChangeEvent<HTMLInputElement>} ev */
+async function onFilesSelected(ev) {
+  const input = ev.currentTarget;
+  const files = Array.from(input?.files || []);
+  if (!files.length) return;
+
+  const rowsToAdd = await Promise.all(
+    files.map(async (file) => {
+      const { artist, title } = cleanFilename(file.name);
+      const durSec = await getAudioDurationSec(file).catch(() => undefined);
+      const id = typeof crypto?.randomUUID === "function"
+        ? crypto.randomUUID()
+        : String(Date.now() + Math.random());
+
+      return /** @type {TrackRow} */ ({
+        id,
+        status: "warn",
+        title,
+        artist,
+        album: "",
+        time: durSec ? secToMMSS(durSec) : "",
+        spotifyUrl: "",
+        added: false,
+      });
+    })
+  );
+
+  setRows((prev) => [...prev, ...rowsToAdd]);
+  input.value = ""; // reset
+}
+
 
   // filter + sort
   const filtered = useMemo(() => {
@@ -141,6 +157,51 @@ const [sort, setSort]     = useState(/** @type {SortKey} */("title"));
       setIsMatching(false);
     }
   }
+
+  // helpers
+function cleanFilename(name) {
+  // usuń rozszerzenie
+  const noExt = name.replace(/\.[a-z0-9]{2,4}$/i, "");
+  // usuń śmieci typu "official video", "copy (1)", itp., ale zostaw info o remixie/wersji
+  const keepTag = (t="") => /mix|remix|edit|extended|radio|version|alt/i.test(t);
+  const stripped = noExt
+    .replace(/\s*copy\s*\(\d+\)/ig, "")
+    .replace(/\s*(official|audio|video|lyrics|hq|hd)\b/ig, "")
+    .replace(/\s*[\[\(]([^)\]]+)[\]\)]/g, (_, t) => keepTag(t) ? ` (${t})` : "") // tylko ważne tagi
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  // "Artist - Title"
+  const parts = stripped.split(/\s-\s/);
+  if (parts.length >= 2) {
+    return { artist: parts[0].trim(), title: parts.slice(1).join(" - ").trim() };
+  }
+  return { artist: "", title: stripped };
+}
+
+function secToMMSS(sec) {
+  const s = Math.round(sec || 0);
+  const mm = Math.floor(s / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+// proste pobranie długości z HTMLAudioElement (bez dodatkowych bibliotek)
+function getAudioDurationSec(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const a = new Audio();
+    a.preload = "metadata";
+    a.src = url;
+    a.onloadedmetadata = () => {
+      const d = isFinite(a.duration) ? a.duration : 0;
+      URL.revokeObjectURL(url);
+      resolve(d);
+    };
+    a.onerror = () => { URL.revokeObjectURL(url); resolve(undefined); };
+  });
+}
+
 
   // actions (upload/delete/playlist) – wypełnij swoimi endpointami
   async function uploadToCloud() { /* ... */ }
