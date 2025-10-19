@@ -98,13 +98,17 @@ export default function DataTable({ rows = [], onToggleRow, onToggleAll, allSele
                 )}
               </td>
 
-              <td className="td sticky-right px-4">
-                {/* wizualny switch; realna selekcja to checkbox po lewej */}
-                <label className="switch" aria-hidden>
-                  <input type="checkbox" checked={!!r.added} readOnly />
-                  <span className="sw-track"><span className="sw-thumb" /></span>
-                </label>
-              </td>
+             <td className="td sticky-right px-4">
+  <label className="switch">
+    <input
+      type="checkbox"
+      checked={!!r.added}
+      onChange={(e) => onToggleRow?.(r.id ?? String(i), e.currentTarget.checked)}
+      aria-label={`Add "${r.title}" to playlist`}
+    />
+    <span className="sw-track"><span className="sw-thumb" /></span>
+  </label>
+</td>
             </tr>
           ))}
         </tbody>
