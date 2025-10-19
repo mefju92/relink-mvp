@@ -1,5 +1,6 @@
 // relink-ui/src/features/import/components/Toolbar.jsx
 // @ts-check
+
 /** @typedef {import("../../../types").FilterKey} FilterKey */
 /** @typedef {{ total:number, matched:number, unmatched:number }} Counts */
 
@@ -19,6 +20,8 @@
  *  isMatching: boolean
  * }} ToolbarProps
  */
+
+/** @typedef {{ items: string[], activeIndex: number, onChange: (idx:number)=>void }} SegmentedProps */
 
 /** @param {ToolbarProps} props */
 export default function Toolbar({
@@ -86,13 +89,24 @@ export default function Toolbar({
 
       {/* Sort */}
       <div className="relative">
-        <button type="button" className="btn btn-neutral" aria-haspopup="listbox" aria-expanded="false" onClick={onSortClick}>
+        <button
+          type="button"
+          className="btn btn-neutral"
+          aria-haspopup="listbox"
+          aria-expanded="false"
+          onClick={onSortClick}
+        >
           Sort: Title <ChevronDown />
         </button>
       </div>
 
       {/* Select all (filtered) */}
-      <button type="button" className="btn btn-neutral" aria-label="Select all (filtered)" onClick={onSelectAll}>
+      <button
+        type="button"
+        className="btn btn-neutral"
+        aria-label="Select all (filtered)"
+        onClick={onSelectAll}
+      >
         Select all
       </button>
     </div>
@@ -100,10 +114,18 @@ export default function Toolbar({
 }
 
 function Spinner() {
-  return <span className="inline-block h-4 w-4 animate-spin border-2 border-slate-300 border-t-slate-600 rounded-full mr-2" aria-hidden />;
+  return (
+    <span
+      className="inline-block h-4 w-4 animate-spin border-2 border-slate-300 border-t-slate-600 rounded-full mr-2"
+      aria-hidden="true"
+    />
+  );
 }
 
-function SegmentedControl({ items = [], activeIndex = 0, onChange = () => {} }) {
+/** @param {SegmentedProps} props */
+function SegmentedControl({ items = [], activeIndex = 0, onChange }) {
+  const handleChange = onChange ?? (() => {}); // fallback gdy nie podany
+
   return (
     <div role="tablist" aria-label="Filters" className="seg">
       {items.map((it, idx) => (
@@ -113,7 +135,7 @@ function SegmentedControl({ items = [], activeIndex = 0, onChange = () => {} }) 
           role="tab"
           aria-pressed={idx === activeIndex}
           className="px-3"
-          onClick={() => onChange(idx)}
+          onClick={() => handleChange(idx)}
         >
           {it}
         </button>
@@ -122,4 +144,19 @@ function SegmentedControl({ items = [], activeIndex = 0, onChange = () => {} }) 
   );
 }
 
-/* Icons… (bez zmian) */
+/* ------- Icons ------- */
+function SearchIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="11" cy="11" r="7" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
+}
+function ChevronDown() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}

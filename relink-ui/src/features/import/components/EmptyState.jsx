@@ -1,5 +1,4 @@
-// @ts-check
-
+// src/features/import/components/EmptyState.jsx
 export default function EmptyState({ onAddFiles, onAddFolder }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -16,9 +15,7 @@ export default function EmptyState({ onAddFiles, onAddFolder }) {
         <button type="button" className="btn btn-primary" onClick={onAddFiles}>Add files</button>
         <button type="button" className="btn btn-neutral" onClick={onAddFolder}>Add folder</button>
       </div>
-      <p className="text-xs text-slate-500">
-        Folder picker works best in Chromium-based browsers.
-      </p>
+      <p className="text-xs text-slate-500">Folder picker works best in Chromium-based browsers.</p>
     </div>
   );
 }

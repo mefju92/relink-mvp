@@ -1,11 +1,11 @@
-// relink-ui/src/features/import/ImportPage.jsx
+// src/features/import/ImportPage.jsx
 // @ts-check
 /** @typedef {import("../../types").TrackRow} TrackRow */
 /** @typedef {import("../../types").FilterKey} FilterKey */
 /** @typedef {import("../../types").SortKey}   SortKey */
 
 import EmptyState from "./components/EmptyState.jsx";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import DataTable from "./components/DataTable.jsx";
 import Stepper from "./components/Stepper.jsx";
 import Toolbar from "./components/Toolbar.jsx";
@@ -14,32 +14,35 @@ import StickyBar from "./components/StickyBar.jsx";
 const API = import.meta.env.VITE_API_URL;
 
 export default function ImportPage() {
-  const [rows, setRows] = useState([]);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("all");
-  const [sort, setSort] = useState("title");
+const [rows, setRows]   = useState(/** @type {TrackRow[]} */([]));
+const [query, setQuery] = useState("");
+const [filter, setFilter] = useState(/** @type {FilterKey} */("all"));
+const [sort, setSort]     = useState(/** @type {SortKey} */("title"));
+
   const [isMatching, setIsMatching] = useState(false);
 
-  // pickery plików/folderów (jak wcześniej) …
-  const filesRef = useRef(null);
-  const folderRef = useRef(null);
+  // pickery plików/folderów
+  const filesRef = useRef(/** @type {HTMLInputElement|null} */(null));
+  const folderRef = useRef(/** @type {HTMLInputElement|null} */(null));
   function openFiles()  { filesRef.current?.click(); }
   function openFolder() { folderRef.current?.click(); }
 
   function toRow(file) {
-    const id = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : String(Date.now() + Math.random());
-    return /** @type {TrackRow} */({
+    const id = typeof crypto?.randomUUID === "function"
+      ? crypto.randomUUID()
+      : String(Date.now() + Math.random());
+    return /** @type {TrackRow} */ ({
       id, status: "warn", title: file.name, artist: "", album: "", time: "", spotifyUrl: "", added: false,
     });
   }
+
+  /** @param {React.ChangeEvent<HTMLInputElement>} ev */
   function onFilesSelected(ev) {
     const input = ev.target;
-    // @ts-ignore
     const files = Array.from(input?.files || []);
     if (!files.length) return;
     setRows(prev => [...prev, ...files.map(toRow)]);
-    // @ts-ignore
-    input.value = "";
+    input.value = ""; // reset
   }
 
   // filter + sort
@@ -127,19 +130,19 @@ export default function ImportPage() {
             artist: r.artist || sp.artist || r.artist,
             album: r.album || sp.album || r.album,
             time: r.time || fmtMs(sp.durationMs),
-            matchScore: m.score,
+            matchScore: m.score, // pole dodatkowe – OK
           };
         })
       );
     } catch (e) {
       console.error("Matching error", e);
-      // tu możesz dorzucić lekki toast/alert
+      // TODO: dodać toast/alert
     } finally {
       setIsMatching(false);
     }
   }
 
-  // actions (upload/delete/playlist) – jak wcześniej…
+  // actions (upload/delete/playlist) – wypełnij swoimi endpointami
   async function uploadToCloud() { /* ... */ }
   async function deleteSelected() { /* ... */ }
   async function createPlaylist(name) { /* ... */ }
@@ -149,8 +152,22 @@ export default function ImportPage() {
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-900">
       {/* Hidden inputs */}
-      <input ref={filesRef} type="file" className="sr-only" multiple accept="audio/*" onChange={onFilesSelected} />
-      <input ref={folderRef} type="file" className="sr-only" multiple onChange={onFilesSelected} webkitdirectory="" directory="" />
+      <input
+        ref={filesRef}
+        type="file"
+        className="sr-only"
+        multiple
+        accept="audio/*"
+        onChange={onFilesSelected}
+      />
+      <input
+        ref={folderRef}
+        type="file"
+        className="sr-only"
+        multiple
+        onChange={onFilesSelected}
+        {.../** @type {any} */ ({ webkitdirectory: "", directory: "" })}
+      />
 
       <div className="mx-auto max-w-[1440px] px-8 py-6">
         <header className="flex items-center justify-between">
@@ -210,5 +227,3 @@ export default function ImportPage() {
     </div>
   );
 }
-
-/* EmptyState jak wcześniej (możesz zostawić bez zmian) */
