@@ -60,6 +60,61 @@ async function onFilesSelected(ev) {
   input.value = ""; // reset
 }
 
+async function deleteSelected() {
+  // jeżeli masz backend – wyślij tam listę rekordów do skasowania
+  const toDelete = rows.filter(r => r.added);
+  if (toDelete.length === 0) return;
+
+  try {
+    if (API) {
+      await fetch(`${API}/files`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: toDelete.map(r => r.id) }),
+      });
+    }
+  } catch (e) {
+    console.warn("Delete API failed, removing locally only.", e);
+  } finally {
+    // zawsze zdejmij ze stanu, żeby UI reagował natychmiast
+    setRows(prev => prev.filter(r => !r.added));
+  }
+}
+
+async function createPlaylist(name) {
+  const selected = rows.filter(r => r.added);
+  if (selected.length === 0) return;
+
+  const payload = {
+    name,
+    // pod backend – dajemy wszystko co mamy; backend wybierze co chce
+    tracks: selected.map(r => ({
+      id: r.id,
+      title: r.title,
+      artist: r.artist || "",
+      spotifyUrl: r.spotifyUrl || "",
+      durationSec: r.time ? Number(r.time.split(":")[0]) * 60 + Number(r.time.split(":")[1]) : undefined,
+    })),
+  };
+
+  try {
+    if (!API) {
+      console.warn("VITE_API_URL nie ustawione – tylko loguję payload:", payload);
+      return;
+    }
+    const res = await fetch(`${API}/playlist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    // UX: po sukcesie wyczyść zaznaczenia
+    setRows(prev => prev.map(r => r.added ? { ...r, added: false } : r));
+  } catch (e) {
+    console.error("Create playlist failed", e);
+  }
+}
+
 
   // filter + sort
   const filtered = useMemo(() => {
