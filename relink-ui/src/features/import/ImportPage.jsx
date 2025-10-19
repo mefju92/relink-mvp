@@ -4,6 +4,7 @@
 /** @typedef {import("../../types").FilterKey} FilterKey */
 /** @typedef {import("../../types").SortKey}   SortKey */
 
+import EmptyState from "./components/EmptyState.jsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import DataTable from "./components/DataTable.jsx";
 import Stepper from "./components/Stepper.jsx";
