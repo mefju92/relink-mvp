@@ -109,6 +109,7 @@ export default function DataTable({ rows = [], onToggleRow, onToggleAll, allSele
     <span className="sw-track"><span className="sw-thumb" /></span>
   </label>
 </td>
+
             </tr>
           ))}
         </tbody>
