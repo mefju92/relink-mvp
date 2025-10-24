@@ -22,6 +22,7 @@ import {
   measureDurationMs,
   msToMMSS,
 } from "../../lib/tracks";
+import { supabase } from "../../supabaseClient";
 
 export default function ImportPage() {
   /** @typedef {import('react').Dispatch<import('react').SetStateAction<UITrack[]>>} SetUITracks */
@@ -32,7 +33,9 @@ export default function ImportPage() {
   const [filter, setFilter] = useState(/** @type {FilterKey} */ ("all"));
   const [sort, setSort]     = useState(/** @type {SortKey}   */ ("title"));
   const [isMatching, setIsMatching] = useState(false);
+
   const [spName, setSpName] = useState(/** @type {string|null} */(null));
+  const [connecting, setConnecting] = useState(false);
 
   // pickery plików/folderów
   /** @type {import('react').RefObject<HTMLInputElement>} */
@@ -42,20 +45,53 @@ export default function ImportPage() {
   const openFiles  = () => filesRef.current?.click();
   const openFolder = () => folderRef.current?.click();
 
-  // status Spotify (chip w headerze)
-  useEffect(() => {
-    (async () => {
-      try {
-        const res  = await fetch(`${API_BASE}/spotify/status`, {
-          headers: { ...(await authHeaders()) },
-        });
-        const data = await safeJson(res);
-        setSpName(data?.connected ? (data?.name || "Connected") : null);
-      } catch {
-        setSpName(null);
-      }
-    })();
-  }, []);
+  // ---- Spotify status (chip) ----
+  async function refreshSpotifyStatus() {
+    try {
+      const res  = await fetch(`${API_BASE}/spotify/status`, {
+        headers: { ...(await authHeaders()) },
+      });
+      const data = await safeJson(res);
+      setSpName(data?.connected ? (data?.name || "Connected") : null);
+    } catch {
+      setSpName(null);
+    }
+  }
+  useEffect(() => { refreshSpotifyStatus(); }, []);
+
+  // Połącz Spotify (przekierowanie na backend -> Spotify -> powrót do frontu)
+  async function connectSpotify() {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token || "";
+      if (!token) { alert("Najpierw zaloguj się."); return; }
+      const origin = window.location.origin;
+      const frontend = `${origin}/`; // po zalogowaniu wróci tu
+      const url = `${API_BASE}/spotify/login?frontend=${encodeURIComponent(frontend)}&token=${encodeURIComponent(token)}`;
+      setConnecting(true);
+      window.location.assign(url);
+    } catch (e) {
+      setConnecting(false);
+      alert(e?.message || "Spotify login failed");
+    }
+  }
+
+  // Odłącz Spotify
+  async function disconnectSpotify() {
+    if (!confirm("Odłączyć Spotify?")) return;
+    try {
+      const res = await fetch(`${API_BASE}/spotify/disconnect`, {
+        method: "POST",
+        headers: { ...(await authHeaders()) },
+      });
+      const data = await safeJson(res);
+      if (!data?.ok) throw new Error(data?.error || "disconnect failed");
+      setSpName(null);
+      alert("Spotify disconnected");
+    } catch (e) {
+      alert(e?.message || "Disconnect failed");
+    }
+  }
 
   /** @param {File} file */
   async function toRow(file) {
@@ -80,10 +116,7 @@ export default function ImportPage() {
   async function onFilesSelected(ev) {
     const files = Array.from(ev.currentTarget.files || []);
     if (!files.length) return;
-
-    const mapped =
-      /** @type {UITrack[]} */ (await Promise.all(files.map(toRow)));
-
+    const mapped = /** @type {UITrack[]} */ (await Promise.all(files.map(toRow)));
     setRows(prev => [...prev, ...mapped]);
     ev.currentTarget.value = ""; // reset inputa
   }
@@ -268,10 +301,33 @@ export default function ImportPage() {
       <div className="mx-auto max-w-[1440px] px-8 py-6">
         <header className="flex items-center justify-between">
           <h1 className="text-xl font-bold">ReLink</h1>
-          <Stepper steps={["Files", "Matching", "Review", "Playlists"]} current={1} />
-          <span className="chip">
-            {spName ? `Connected: ${spName}` : "Spotify: not connected"}
-          </span>
+
+          <div className="flex items-center gap-3">
+            <Stepper steps={["Files", "Matching", "Review", "Playlists"]} current={1} />
+
+            {spName ? (
+              <div className="flex items-center gap-2">
+                <span className="chip">Connected: {spName}</span>
+                <button
+                  type="button"
+                  className="btn btn-neutral"
+                  onClick={disconnectSpotify}
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className={`btn btn-primary ${connecting ? "btn-disabled" : ""}`}
+                disabled={connecting}
+                onClick={connectSpotify}
+                title="Connect your Spotify account"
+              >
+                {connecting ? "Connecting…" : "Connect Spotify"}
+              </button>
+            )}
+          </div>
         </header>
 
         <section className="mt-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-white shadow-card relative">
