@@ -1,13 +1,13 @@
-// src/lib/api.js
-import { supabase } from "../supabaseClient"; // jeśli nie używasz supabase – usuń i zwracaj {} w authHeaders
+import { supabase } from '../supabaseClient';
 
-export const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, ""); // bez końcowego '/'
+export const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 
 export async function authHeaders() {
   try {
-    const { data } = await supabase.auth.getSession();
-    const token = data?.session?.access_token;
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    const { data, error } = await supabase.auth.getSession();
+    if (error) return {};
+    const t = data?.session?.access_token;
+    return t ? { Authorization: `Bearer ${t}` } : {};
   } catch {
     return {};
   }
