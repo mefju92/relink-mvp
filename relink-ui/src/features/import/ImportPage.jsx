@@ -16,6 +16,7 @@ import StickyBar from "./components/StickyBar.jsx";
 import { API_BASE, authHeaders, safeJson } from "../../lib/api";
 import { cleanTitle, cleanArtist, readTagFromName, measureDurationMs, msToMMSS } from "../../lib/tracks";
 
+
 export default function ImportPage() {
   const [rows, setRows]   = useState(/** @type {UITrack[]} */([]));
   const [query, setQuery] = useState("");
@@ -25,8 +26,8 @@ export default function ImportPage() {
   const [spName, setSpName] = useState(/** @type {string|null} */(null));
 
   // pickery plików/folderów
-  const filesRef  = useRef(/** @type {HTMLInputElement|null} */(null));
-  const folderRef = useRef(/** @type {HTMLInputElement|null} */(null));
+  const filesRef  = useRef(null);
+  const folderRef = useRef(null);
   const openFiles  = () => filesRef.current?.click();
   const openFolder = () => folderRef.current?.click();
 
