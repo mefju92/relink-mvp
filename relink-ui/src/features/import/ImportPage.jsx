@@ -30,15 +30,39 @@ export default function ImportPage() {
 
   const [spName, setSpName] = useState(/** @type {string|null} */(null));
   const isSpotifyConnected = !!spName;
-  const [connecting, setConnecting] = useState(false);
+
+  // token Supabase do linku logowania
+  const [authToken, setAuthToken] = useState("");
+  const loginFrontend = `${window.location.origin}/app?spotify=ok`;
+  const loginHref = authToken
+    ? `${API_BASE}/spotify/login?frontend=${encodeURIComponent(loginFrontend)}&token=${encodeURIComponent(authToken)}`
+    : "";
 
   // pickery plików/folderów
-  /** @type {import('react').RefObject<HTMLInputElement>} */
-  const filesRef  = useRef(null);
-  /** @type {import('react').RefObject<HTMLInputElement>} */
-  const folderRef = useRef(null);
+  /** @type {import('react').RefObject<HTMLInputElement>} */ const filesRef  = useRef(null);
+  /** @type {import('react').RefObject<HTMLInputElement>} */ const folderRef = useRef(null);
   const openFiles  = () => filesRef.current?.click();
   const openFolder = () => folderRef.current?.click();
+
+  // ---------------- Auth token (Supabase) ----------------
+  useEffect(() => {
+    let cancel = false;
+
+    async function loadToken() {
+      const { data } = await supabase.auth.getSession();
+      if (!cancel) setAuthToken(data.session?.access_token || "");
+    }
+    loadToken();
+
+    const sub = supabase.auth.onAuthStateChange((_evt, sess) => {
+      setAuthToken(sess?.access_token || "");
+    });
+
+    return () => {
+      cancel = true;
+      sub.data.subscription.unsubscribe();
+    };
+  }, []);
 
   // ---------------- Spotify status ----------------
   async function refreshSpotifyStatus() {
@@ -51,30 +75,28 @@ export default function ImportPage() {
     }
   }
 
-  // po mountcie + po powrocie z ?spotify=ok + retry (sesja Supabase ładuje się asynchronicznie)
+  // mount + powrót z ?spotify=ok + retry (sesja potrafi dojść chwilę później)
   useEffect(() => {
     let cancelled = false;
 
     const once = async () => {
       await refreshSpotifyStatus();
       if (cancelled) return;
-      // 3 szybkie próby gdyby sesja przyszła chwilę później
       for (let i = 0; i < 3 && !cancelled && !spName; i++) {
         await wait(400);
         await refreshSpotifyStatus();
       }
     };
 
-    // po powrocie z callbacka
+    // wyczyść znacznik z URL po powrocie
     const url = new URL(window.location.href);
     if (url.searchParams.get("spotify") === "ok") {
-      // wyczyść query param
       url.searchParams.delete("spotify");
       window.history.replaceState({}, "", url.toString());
     }
 
-    // odpal raz + odświeżaj po zmianie sesji
     once();
+
     const sub = supabase.auth.onAuthStateChange(() => refreshSpotifyStatus());
     const onFocus = () => refreshSpotifyStatus();
     document.addEventListener("visibilitychange", onFocus);
@@ -86,25 +108,6 @@ export default function ImportPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  async function connectSpotify() {
-    try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) {
-        alert("Najpierw zaloguj się.");
-        return;
-      }
-      setConnecting(true);
-      const origin = window.location.origin;
-      const frontend = `${origin}/app?spotify=ok`;
-      const url = `${API_BASE}/spotify/login?frontend=${encodeURIComponent(frontend)}&token=${encodeURIComponent(token)}`;
-      window.location.assign(url);
-    } catch (e) {
-      setConnecting(false);
-      alert(e?.message || "Spotify login failed");
-    }
-  }
 
   async function disconnectSpotify() {
     if (!confirm("Odłączyć Spotify?")) return;
@@ -208,7 +211,7 @@ export default function ImportPage() {
         const res  = await fetch(`${API_BASE}/match/progress`, { headers: { ...(await authHeaders()) } });
         const data = await safeJson(res);
 
-        if (!data.exists) break;         // nic do śledzenia
+        if (!data.exists) break;
         if (data.error) throw new Error(data.error);
         if (!data.done) { await wait(600); continue; }
 
@@ -323,24 +326,26 @@ export default function ImportPage() {
 
       <div className="mx-auto max-w-[1440px] px-8 py-6">
         {/* Header: tytuł + connect/disconnect */}
-        <header className="flex items-center justify-between">
+        <header className="relative z-10 flex items-center justify-between">
           <h1 className="text-xl font-bold">ReLink</h1>
+
           <div className="flex items-center gap-3">
             {isSpotifyConnected ? (
               <>
                 <span className="chip">Connected: {spName}</span>
-                <button type="button" className="btn btn-neutral" onClick={disconnectSpotify}>Disconnect</button>
+                <button type="button" className="btn btn-neutral" onClick={disconnectSpotify}>
+                  Disconnect
+                </button>
               </>
             ) : (
-              <button
-                type="button"
-                className={`btn btn-primary ${connecting ? "btn-disabled" : ""}`}
-                disabled={connecting}
-                onClick={connectSpotify}
-                title="Connect your Spotify account"
+              <a
+                className={`btn ${authToken ? "btn-primary" : "btn-disabled"}`}
+                href={authToken ? loginHref : undefined}
+                onClick={(e) => { if (!authToken) e.preventDefault(); }}
+                title={authToken ? "Connect your Spotify account" : "Loading auth…"}
               >
-                {connecting ? "Connecting…" : "Connect Spotify"}
-              </button>
+                Connect Spotify
+              </a>
             )}
           </div>
         </header>
@@ -392,7 +397,6 @@ export default function ImportPage() {
                 onUpload={uploadToCloud}
                 onUndo={() => window.history.back()}
                 onDelete={deleteSelected}
-                // nazwa playlisty + walidacja
                 playlistName={playlistName}
                 onPlaylistNameChange={setPlaylistName}
                 canCreate={isSpotifyConnected && selectedMatched.length > 0 && !!playlistName.trim()}
