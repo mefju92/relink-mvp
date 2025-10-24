@@ -14,7 +14,7 @@ import Stepper from "./components/Stepper.jsx";
 import Toolbar from "./components/Toolbar.jsx";
 import StickyBar from "./components/StickyBar.jsx";
 
-import { API_BASE, authHeaders, safeJson } from "../../lib/api";
+import { API, API_BASE, authHeaders, safeJson } from "../../lib/api";
 import {
   cleanTitle,
   cleanArtist,
@@ -48,8 +48,8 @@ export default function ImportPage() {
   // ---- Spotify status (chip) ----
   async function refreshSpotifyStatus() {
     try {
-      const res  = await fetch(`${API_BASE}/spotify/status`, {
-        headers: { ...(await authHeaders()) },
+      const res = await fetch(`${API}/spotify/status`, {
+        headers: { ...(await authHeaders()) }
       });
       const data = await safeJson(res);
       setSpName(data?.connected ? (data?.name || "Connected") : null);
@@ -67,6 +67,7 @@ export default function ImportPage() {
       if (!token) { alert("Najpierw zaloguj się."); return; }
       const origin = window.location.origin;
       const frontend = `${origin}/`; // po zalogowaniu wróci tu
+      // UWAGA: login zawsze na API_BASE (bez /api)
       const url = `${API_BASE}/spotify/login?frontend=${encodeURIComponent(frontend)}&token=${encodeURIComponent(token)}`;
       setConnecting(true);
       window.location.assign(url);
@@ -80,9 +81,9 @@ export default function ImportPage() {
   async function disconnectSpotify() {
     if (!confirm("Odłączyć Spotify?")) return;
     try {
-      const res = await fetch(`${API_BASE}/spotify/disconnect`, {
+      const res = await fetch(`${API}/spotify/disconnect`, {
         method: "POST",
-        headers: { ...(await authHeaders()) },
+        headers: { ...(await authHeaders()) }
       });
       const data = await safeJson(res);
       if (!data?.ok) throw new Error(data?.error || "disconnect failed");
@@ -162,8 +163,8 @@ export default function ImportPage() {
         })),
       };
 
-      // 1) start
-      const start = await fetch(`${API_BASE}/match`, {
+      // 1) start (UWAGA: /api -> użyj API)
+      const start = await fetch(`${API}/match`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify(payload),
@@ -176,7 +177,7 @@ export default function ImportPage() {
 
       // 2) polling
       for (;;) {
-        const res  = await fetch(`${API_BASE}/match/progress`, {
+        const res  = await fetch(`${API}/match/progress`, {
           headers: { ...(await authHeaders()) },
         });
         const data = await safeJson(res);
@@ -221,7 +222,8 @@ export default function ImportPage() {
     files.forEach(f => form.append("files", f, f.name));
 
     try {
-      const res  = await fetch(`${API_BASE}/upload`, {
+      // /api -> API
+      const res  = await fetch(`${API}/upload`, {
         method: "POST",
         headers: { ...(await authHeaders()) },
         body: form,
@@ -243,7 +245,7 @@ export default function ImportPage() {
 
     // (opcjonalnie) fizyczne kasowanie po stronie API
     try {
-      await fetch(`${API_BASE}/files`, {
+      await fetch(`${API}/files`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify({ ids }),
@@ -261,7 +263,8 @@ export default function ImportPage() {
     if (!uris.length) return alert("Zaznacz dopasowane utwory.");
 
     try {
-      const res  = await fetch(`${API_BASE}/playlist`, {
+      // /api -> API
+      const res  = await fetch(`${API}/playlist`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify({ name, trackUris: uris }),
