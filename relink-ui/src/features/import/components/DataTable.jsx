@@ -1,135 +1,112 @@
-// relink-ui/src/features/import/components/DataTable.jsx
+// src/features/import/components/DataTable.jsx
 // @ts-check
-import { useEffect, useRef, useState } from "react";
+
 /** @typedef {import("../../../types").TrackRow} TrackRow */
+/** @typedef {{ durationMs?: number, file?: File, spotifyId?: string }} ExtraRow */
+/** @typedef {(TrackRow & ExtraRow)} UITrack */
 
 /**
- * @typedef {{
- *   rows: TrackRow[],
- *   onToggleRow: (id: string, val: boolean) => void,
- *   onToggleAll: (val: boolean) => void,
- *   allSelected: boolean
- * }} Props
+ * @param {{
+ *  rows: UITrack[],
+ *  allSelected?: boolean,
+ *  onToggleRow: (id: string, val: boolean) => void,
+ *  onToggleAll: (val: boolean) => void,
+ * }} props
  */
-
-/** @param {Props} props */
-export default function DataTable({ rows = [], onToggleRow, onToggleAll, allSelected = false }) {
-  // --- sticky header shadow ---
-  const wrapRef = useRef(null);
-  const [stuck, setStuck] = useState(false);
-
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const onScroll = () => setStuck(el.scrollTop > 0);
-    el.addEventListener("scroll", onScroll);
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
-
+export default function DataTable({
+  rows = [],
+  allSelected = false,
+  onToggleRow = () => {},
+  onToggleAll = () => {},
+}) {
   return (
-    <div ref={wrapRef} className="relative overflow-auto">
-      <table className="table">
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
         <thead>
-          <tr className="row">
-            <th className={`th sticky-left w-[56px] px-4 text-left ${stuck ? "shadow-stuck" : ""}`}>
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-[var(--border)] text-[var(--primary)] focus-visible:ring-2"
-                  aria-label="Select all rows"
-                  checked={allSelected}
-                  onChange={(e) => onToggleAll?.(e.currentTarget.checked)}
-                />
-              </label>
+          <tr className="bg-slate-50">
+            <th className="w-10 text-center p-2">
+              <input
+                type="checkbox"
+                checked={!!allSelected}
+                onChange={(e) => onToggleAll(e.target.checked)}
+                aria-label="Select all rows (filtered)"
+              />
             </th>
-            <th className={`th w-[160px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Status</th>
-            <th className={`th text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Title</th>
-            <th className={`th w-[220px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Artist</th>
-            <th className={`th w-[220px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Album</th>
-            <th className={`th w-[90px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Length</th>
-            <th className={`th w-[180px] text-left px-3 ${stuck ? "shadow-stuck" : ""}`}>Spotify</th>
-            <th className={`th sticky-right w-[140px] text-left px-4 ${stuck ? "shadow-stuck" : ""}`}>
-              Add to playlist
-            </th>
+            <th className="text-left p-2">Status</th>
+            <th className="text-left p-2">Title</th>
+            <th className="text-left p-2">Artist</th>
+            <th className="text-left p-2">Album</th>
+            <th className="text-left p-2">Length</th>
+            <th className="text-left p-2">Spotify</th>
+            <th className="w-28 text-center p-2">Add to playlist</th>
           </tr>
         </thead>
-
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={r.id ?? i} className="row hover:bg-slate-50/80">
-              <td className="td sticky-left px-4">
+          {rows.map((r) => (
+            <tr key={r.id} className="border-t border-[var(--border)]">
+              <td className="text-center p-2">
                 <input
                   type="checkbox"
-                  className="h-4 w-4 rounded border-[var(--border)] text-[var(--primary)] focus-visible:ring-2"
-                  aria-label={`Select row ${i + 1}`}
                   checked={!!r.added}
-                  onChange={(e) => onToggleRow?.(r.id ?? String(i), e.currentTarget.checked)}
+                  onChange={(e) => onToggleRow(r.id, e.target.checked)}
+                  aria-label={`Select ${r.title || "track"}`}
                 />
               </td>
-
-              <td className="td px-3">
-                {r.status === "warn" ? (
-                  <span className="badge-warn"><WarnIcon /> No match</span>
-                ) : (
-                  <span className="chip"><CheckIcon /> Matched</span>
-                )}
-              </td>
-
-              <td className="td px-3 font-medium text-slate-900 cursor-pointer hover:underline">
-                {r.title}
-              </td>
-              <td className="td px-3 text-slate-700">{r.artist || "—"}</td>
-              <td className="td px-3 text-slate-700">{r.album || "—"}</td>
-              <td className="td px-3 text-slate-700">{r.time || "—"}</td>
-
-              <td className="td px-3">
+              <td className="p-2"><StatusBadge status={r.status} /></td>
+              <td className="p-2">{r.title || "—"}</td>
+              <td className="p-2">{r.artist || "—"}</td>
+              <td className="p-2">{r.album || "—"}</td>
+              <td className="p-2">{r.time || "—"}</td>
+              <td className="p-2">
                 {r.spotifyUrl ? (
                   <a
-                    className="text-emerald-700 hover:underline"
                     href={r.spotifyUrl}
                     target="_blank"
                     rel="noreferrer"
-                    aria-label="View on Spotify"
+                    className="text-blue-600 underline"
                   >
-                    View on Spotify
+                    Open
                   </a>
                 ) : (
                   "—"
                 )}
               </td>
-
-             <td className="td sticky-right px-4">
-  <label className="switch">
-    <input
-      type="checkbox"
-      checked={!!r.added}
-      onChange={(e) => onToggleRow?.(r.id ?? String(i), e.currentTarget.checked)}
-      aria-label={`Add "${r.title}" to playlist`}
-    />
-    <span className="sw-track"><span className="sw-thumb" /></span>
-  </label>
-</td>
-
+              <td className="text-center p-2">
+                {/* jeśli chcesz przełącznik – użyj r.added lub własnego pola */}
+                {/* Póki co zostawiamy pustą komórkę; zaznaczanie odbywa się checkboxem z lewej */}
+                {/* <YourSwitch checked={!!r.added} onChange={(v)=>onToggleRow(r.id, v)} /> */}
+              </td>
             </tr>
           ))}
+
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={8} className="p-6 text-center text-slate-500 italic">
+                No tracks to show
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
   );
 }
 
-/* ——— Ikony ——— */
-function WarnIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" className="text-[var(--warning-text)]" fill="currentColor">
-      <path d="M1 21h22L12 2 1 21zm12-3h-2v2h2v-2zm0-8h-2v6h2V10z" />
-    </svg>
-  );
-}
-function CheckIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className="text-emerald-700">
-      <path d="M9 16.2l-3.5-3.5L4 14.2l5 5 12-12-1.4-1.4z" />
-    </svg>
-  );
+/** @param {{status?: TrackRow['status']}} p */
+function StatusBadge({ status }) {
+  if (status === "ok") {
+    return (
+      <span className="inline-block rounded bg-green-100 px-2 py-0.5 text-green-700">
+        Match
+      </span>
+    );
+  }
+  if (status === "warn") {
+    return (
+      <span className="inline-block rounded bg-amber-100 px-2 py-0.5 text-amber-700">
+        No match
+      </span>
+    );
+  }
+  return <span>—</span>;
 }
