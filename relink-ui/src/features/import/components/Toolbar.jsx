@@ -1,6 +1,4 @@
-// src/features/import/components/Toolbar.jsx
 // @ts-check
-
 /** @typedef {import("../../../types").FilterKey} FilterKey */
 /** @typedef {{ total:number, matched:number, unmatched:number }} Counts */
 
@@ -29,7 +27,7 @@ export default function Toolbar({
   query = "",
   onQueryChange = () => {},
   counts = { total: 0, matched: 0, unmatched: 0 },
-  filter = "all",
+  filter = /** @type {FilterKey} */ ("all"),
   onFilterChange = () => {},
   onSortClick = () => {},
   onSelectAll = () => {},
@@ -47,7 +45,8 @@ export default function Toolbar({
   ];
   const activeIndex = filter === "matched" ? 1 : filter === "unmatched" ? 2 : 0;
 
-  const matchDisabled = !canMatch || isMatching;
+  // "Match tracks" aktywny tylko gdy są pliki i jest połączenie Spotify
+  const matchDisabled = !canMatch || !isSpotifyConnected || isMatching;
 
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -65,8 +64,13 @@ export default function Toolbar({
           onClick={onMatch}
           disabled={matchDisabled}
           aria-live="polite"
-          aria-disabled={matchDisabled}
-          title={isSpotifyConnected ? "" : "Connect Spotify to use matching"}
+          title={
+            !isSpotifyConnected
+              ? "Connect Spotify to enable matching"
+              : !canMatch
+              ? "Add files to enable matching"
+              : undefined
+          }
         >
           {isMatching ? (<><Spinner /> Matching…</>) : "Match tracks"}
         </button>
@@ -95,24 +99,13 @@ export default function Toolbar({
 
       {/* Sort */}
       <div className="relative">
-        <button
-          type="button"
-          className="btn btn-neutral"
-          aria-haspopup="listbox"
-          aria-expanded="false"
-          onClick={onSortClick}
-        >
+        <button type="button" className="btn btn-neutral" onClick={onSortClick}>
           Sort: Title <ChevronDown />
         </button>
       </div>
 
       {/* Select all (filtered) */}
-      <button
-        type="button"
-        className="btn btn-neutral"
-        aria-label="Select all (filtered)"
-        onClick={onSelectAll}
-      >
+      <button type="button" className="btn btn-neutral" onClick={onSelectAll}>
         Select all
       </button>
     </div>
@@ -130,7 +123,7 @@ function Spinner() {
 
 /** @param {SegmentedProps} props */
 function SegmentedControl({ items = [], activeIndex = 0, onChange }) {
-  const handleChange = onChange ?? (() => {}); // fallback
+  const handleChange = onChange ?? (() => {});
   return (
     <div role="tablist" aria-label="Filters" className="seg">
       {items.map((it, idx) => (
@@ -149,7 +142,6 @@ function SegmentedControl({ items = [], activeIndex = 0, onChange }) {
   );
 }
 
-/* ------- Icons ------- */
 function SearchIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
