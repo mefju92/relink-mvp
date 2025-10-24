@@ -14,7 +14,7 @@ import Stepper from "./components/Stepper.jsx";
 import Toolbar from "./components/Toolbar.jsx";
 import StickyBar from "./components/StickyBar.jsx";
 
-import { API, API_BASE, authHeaders, safeJson } from "../../lib/api";
+import { API_BASE, authHeaders, safeJson } from "../../lib/api";
 import {
   cleanTitle,
   cleanArtist,
@@ -32,10 +32,15 @@ export default function ImportPage() {
   const [query, setQuery]   = useState("");
   const [filter, setFilter] = useState(/** @type {FilterKey} */ ("all"));
   const [sort, setSort]     = useState(/** @type {SortKey}   */ ("title"));
+
   const [isMatching, setIsMatching] = useState(false);
+  const [didMatch, setDidMatch]     = useState(false);   // krok “Matching” zakończony
+  const [playlistsDone, setPlaylistsDone] = useState(false); // krok “Playlists” zakończony
 
   const [spName, setSpName] = useState(/** @type {string|null} */(null));
   const [connecting, setConnecting] = useState(false);
+
+  const [playlistName, setPlaylistName] = useState("ReLink Import");
 
   // pickery plików/folderów
   /** @type {import('react').RefObject<HTMLInputElement>} */
@@ -48,8 +53,8 @@ export default function ImportPage() {
   // ---- Spotify status (chip) ----
   async function refreshSpotifyStatus() {
     try {
-      const res = await fetch(`${API}/spotify/status`, {
-        headers: { ...(await authHeaders()) }
+      const res = await fetch(`${API_BASE}/spotify/status`, {
+        headers: { ...(await authHeaders()) },
       });
       const data = await safeJson(res);
       setSpName(data?.connected ? (data?.name || "Connected") : null);
@@ -59,15 +64,15 @@ export default function ImportPage() {
   }
   useEffect(() => { refreshSpotifyStatus(); }, []);
 
-  // Połącz Spotify (przekierowanie na backend -> Spotify -> powrót do frontu)
+  // Połącz Spotify
   async function connectSpotify() {
     try {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token || "";
       if (!token) { alert("Najpierw zaloguj się."); return; }
       const origin = window.location.origin;
-      const frontend = `${origin}/`; // po zalogowaniu wróci tu
-      // UWAGA: login zawsze na API_BASE (bez /api)
+      // po zalogowaniu backend dopisze ?spotify=ok lub ?spotify=error
+      const frontend = `${origin}${origin.endsWith("/") ? "" : "/"}`;
       const url = `${API_BASE}/spotify/login?frontend=${encodeURIComponent(frontend)}&token=${encodeURIComponent(token)}`;
       setConnecting(true);
       window.location.assign(url);
@@ -81,9 +86,9 @@ export default function ImportPage() {
   async function disconnectSpotify() {
     if (!confirm("Odłączyć Spotify?")) return;
     try {
-      const res = await fetch(`${API}/spotify/disconnect`, {
+      const res = await fetch(`${API_BASE}/spotify/disconnect`, {
         method: "POST",
-        headers: { ...(await authHeaders()) }
+        headers: { ...(await authHeaders()) },
       });
       const data = await safeJson(res);
       if (!data?.ok) throw new Error(data?.error || "disconnect failed");
@@ -119,6 +124,8 @@ export default function ImportPage() {
     if (!files.length) return;
     const mapped = /** @type {UITrack[]} */ (await Promise.all(files.map(toRow)));
     setRows(prev => [...prev, ...mapped]);
+    setDidMatch(false);         // dodano nowe pliki -> matching jeszcze nie zrobiony
+    setPlaylistsDone(false);
     ev.currentTarget.value = ""; // reset inputa
   }
 
@@ -153,6 +160,10 @@ export default function ImportPage() {
   // --- MATCHING: start + polling progress ---
   async function runMatching() {
     if (!rows.length || isMatching) return;
+    if (!isSpotifyConnected) {
+      alert("Połącz najpierw Spotify.");
+      return;
+    }
     setIsMatching(true);
     try {
       const payload = {
@@ -163,8 +174,8 @@ export default function ImportPage() {
         })),
       };
 
-      // 1) start (UWAGA: /api -> użyj API)
-      const start = await fetch(`${API}/match`, {
+      // 1) start
+      const start = await fetch(`${API_BASE}/match`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify(payload),
@@ -177,7 +188,7 @@ export default function ImportPage() {
 
       // 2) polling
       for (;;) {
-        const res  = await fetch(`${API}/match/progress`, {
+        const res  = await fetch(`${API_BASE}/match/progress`, {
           headers: { ...(await authHeaders()) },
         });
         const data = await safeJson(res);
@@ -186,7 +197,7 @@ export default function ImportPage() {
         if (data.error) throw new Error(data.error);
         if (!data.done) { await wait(600); continue; }
 
-        // 3) mamy wyniki (1:1 z kolejnością wejściowych plików)
+        // 3) wyniki (1:1 do kolejności wejściowych plików)
         const results = data.results?.results || [];
         setRows(prev => prev.map((r, i) => {
           const m = results[i];
@@ -203,6 +214,7 @@ export default function ImportPage() {
             time:      r.time   || (m.durationMs ? msToMMSS(m.durationMs) : r.time),
           };
         }));
+        setDidMatch(true);
         break;
       }
     } catch (e) {
@@ -222,8 +234,7 @@ export default function ImportPage() {
     files.forEach(f => form.append("files", f, f.name));
 
     try {
-      // /api -> API
-      const res  = await fetch(`${API}/upload`, {
+      const res  = await fetch(`${API_BASE}/upload`, {
         method: "POST",
         headers: { ...(await authHeaders()) },
         body: form,
@@ -242,17 +253,6 @@ export default function ImportPage() {
 
     // lokalnie
     setRows(prev => prev.filter(r => !ids.includes(r.id)));
-
-    // (opcjonalnie) fizyczne kasowanie po stronie API
-    try {
-      await fetch(`${API}/files`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-        body: JSON.stringify({ ids }),
-      });
-    } catch (e) {
-      console.warn("Delete API failed:", e);
-    }
   }
 
   async function createPlaylist(name) {
@@ -261,10 +261,10 @@ export default function ImportPage() {
       .map(r => `spotify:track:${r.spotifyId}`);
 
     if (!uris.length) return alert("Zaznacz dopasowane utwory.");
+    if (!isSpotifyConnected) { alert("Połącz Spotify."); return; }
 
     try {
-      // /api -> API
-      const res  = await fetch(`${API}/playlist`, {
+      const res  = await fetch(`${API_BASE}/playlist`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify({ name, trackUris: uris }),
@@ -272,12 +272,19 @@ export default function ImportPage() {
       const data = await safeJson(res);
       if (!res.ok || data?.ok === false) throw new Error(data.error || "playlist failed");
 
+      setPlaylistsDone(true);
       if (data.playlistUrl) window.open(data.playlistUrl, "_blank", "noreferrer");
       else alert("Playlist utworzona.");
     } catch (e) {
       alert(e.message || "Create playlist failed");
     }
   }
+
+  const isSpotifyConnected = !!spName;
+  const filesDone     = rows.length > 0;
+  const matchingDone  = didMatch;
+  const selectedMatched = rows.filter(r => r.added && r.spotifyId).length;
+  const canCreate = isSpotifyConnected && selectedMatched > 0 && !!playlistName.trim();
 
   const showEmpty = rows.length === 0 && !query;
 
@@ -302,12 +309,10 @@ export default function ImportPage() {
       />
 
       <div className="mx-auto max-w-[1440px] px-8 py-6">
+        {/* Header */}
         <header className="flex items-center justify-between">
           <h1 className="text-xl font-bold">ReLink</h1>
-
           <div className="flex items-center gap-3">
-            <Stepper steps={["Files", "Matching", "Review", "Playlists"]} current={1} />
-
             {spName ? (
               <div className="flex items-center gap-2">
                 <span className="chip">Connected: {spName}</span>
@@ -333,6 +338,16 @@ export default function ImportPage() {
           </div>
         </header>
 
+        {/* KROKI – na osobnym, wycentrowanym wierszu */}
+        <div className="mt-4 flex justify-center">
+          <Stepper
+            steps={["Files", "Matching", "Playlists"]}
+            current={2}
+            done={[filesDone, matchingDone, playlistsDone]}
+          />
+        </div>
+
+        {/* Główna karta */}
         <section className="mt-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-white shadow-card relative">
           <div className="border-b border-[var(--border)] p-4">
             <Toolbar
@@ -350,8 +365,9 @@ export default function ImportPage() {
               onAddFiles={openFiles}
               onAddFolder={openFolder}
               onMatch={runMatching}
-              canMatch={rows.length > 0}
+              canMatch={rows.length > 0 && isSpotifyConnected}
               isMatching={isMatching}
+              isSpotifyConnected={isSpotifyConnected}
             />
           </div>
 
@@ -370,7 +386,10 @@ export default function ImportPage() {
                 onUpload={uploadToCloud}
                 onUndo={() => window.history.back()}
                 onDelete={deleteSelected}
-                onCreate={() => createPlaylist("ReLink Import")}
+                onCreate={() => createPlaylist(playlistName)}
+                playlistName={playlistName}
+                onPlaylistNameChange={setPlaylistName}
+                canCreate={canCreate}
               />
             </>
           )}
@@ -390,4 +409,4 @@ export default function ImportPage() {
 }
 
 /** utils */
-function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+function wait(ms){ return new Promise(r => setTimeout(r, ms)); }

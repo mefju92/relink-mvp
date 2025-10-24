@@ -1,4 +1,4 @@
-// relink-ui/src/features/import/components/Toolbar.jsx
+// src/features/import/components/Toolbar.jsx
 // @ts-check
 
 /** @typedef {import("../../../types").FilterKey} FilterKey */
@@ -17,7 +17,8 @@
  *  onAddFolder: () => void,
  *  onMatch: () => void,
  *  canMatch: boolean,
- *  isMatching: boolean
+ *  isMatching: boolean,
+ *  isSpotifyConnected: boolean
  * }} ToolbarProps
  */
 
@@ -37,6 +38,7 @@ export default function Toolbar({
   onMatch = () => {},
   canMatch = false,
   isMatching = false,
+  isSpotifyConnected = false,
 }) {
   const items = [
     `All (${counts.total ?? 0})`,
@@ -44,6 +46,8 @@ export default function Toolbar({
     `Unmatched (${counts.unmatched ?? 0})`,
   ];
   const activeIndex = filter === "matched" ? 1 : filter === "unmatched" ? 2 : 0;
+
+  const matchDisabled = !canMatch || isMatching;
 
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -57,10 +61,12 @@ export default function Toolbar({
         </button>
         <button
           type="button"
-          className={`btn btn-primary ${(!canMatch || isMatching) ? "btn-disabled" : ""}`}
+          className={`btn ${matchDisabled ? "btn-disabled" : "btn-primary"}`}
           onClick={onMatch}
-          disabled={!canMatch || isMatching}
+          disabled={matchDisabled}
           aria-live="polite"
+          aria-disabled={matchDisabled}
+          title={isSpotifyConnected ? "" : "Connect Spotify to use matching"}
         >
           {isMatching ? (<><Spinner /> Matching…</>) : "Match tracks"}
         </button>
@@ -124,8 +130,7 @@ function Spinner() {
 
 /** @param {SegmentedProps} props */
 function SegmentedControl({ items = [], activeIndex = 0, onChange }) {
-  const handleChange = onChange ?? (() => {}); // fallback gdy nie podany
-
+  const handleChange = onChange ?? (() => {}); // fallback
   return (
     <div role="tablist" aria-label="Filters" className="seg">
       {items.map((it, idx) => (
