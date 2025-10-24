@@ -1,56 +1,49 @@
 // @ts-check
 /**
- * @param {{
- *  selected: number,
- *  onUpload: () => void,
- *  onUndo: () => void,
- *  onDelete: () => void,
- *  onCreate: () => void,
- *  playlistName: string,
- *  onPlaylistNameChange: (v: string) => void,
- *  canCreate: boolean
- * }} p
+ * @typedef {Object} Props
+ * @property {number} selected
+ * @property {() => Promise<void> | void} onUpload
+ * @property {() => void} onUndo
+ * @property {() => Promise<void> | void} onDelete
+ * @property {string} playlistName
+ * @property {(v: string) => void} onPlaylistNameChange
+ * @property {boolean} canCreate
+ * @property {() => Promise<void> | void} onCreate
  */
+
+/** @param {Props} props */
 export default function StickyBar({
-  selected = 0,
-  onUpload = () => {},
-  onUndo = () => {},
-  onDelete = () => {},
-  onCreate = () => {},
-  playlistName = "ReLink Import",
-  onPlaylistNameChange = () => {},
-  canCreate = false,
+  selected,
+  onUpload,
+  onUndo,
+  onDelete,
+  playlistName,
+  onPlaylistNameChange,
+  canCreate,
+  onCreate,
 }) {
   return (
-    <div className="sticky bottom-0 z-10 mt-4 border-t border-[var(--border)] bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-3 px-4 py-3">
-        <div className="flex items-center gap-2 text-sm text-slate-600">
-          <span className="chip">{selected} selected</span>
-          <button className="btn btn-neutral" onClick={onUpload} disabled={selected === 0}>
-            Upload to cloud ({selected})
-          </button>
-          <button className="btn btn-neutral" onClick={onUndo}>Undo</button>
-          <button className="btn btn-danger" onClick={onDelete} disabled={selected === 0}>
-            Delete ({selected})
-          </button>
-        </div>
+    <div className="sticky bottom-0 z-10 flex items-center justify-between gap-3 border-t border-[var(--border)] bg-white/95 px-4 py-3 backdrop-blur">
+      <div className="text-sm text-slate-600">{selected} selected</div>
 
-        <div className="flex items-center gap-2">
-          <input
-            value={playlistName}
-            onChange={(e) => onPlaylistNameChange(e.target.value)}
-            placeholder="Playlist name"
-            className="w-[240px] rounded-xl border border-[var(--border)] px-3 py-2 text-sm outline-none focus-visible:ring-2"
-          />
-          <button
-            className={`btn ${canCreate ? "btn-success" : "btn-disabled"}`}
-            onClick={onCreate}
-            disabled={!canCreate}
-            title={!canCreate ? "Select matched tracks and set a name" : undefined}
-          >
-            Create playlist ({selected})
-          </button>
-        </div>
+      <div className="flex items-center gap-2">
+        <button className="btn btn-neutral" onClick={onUpload}>Upload to cloud</button>
+        <button className="btn btn-neutral" onClick={onUndo}>Undo</button>
+        <button className="btn btn-danger" onClick={onDelete}>Delete</button>
+
+        <input
+          value={playlistName}
+          onChange={(e) => onPlaylistNameChange(e.target.value)}
+          placeholder="Playlist name"
+          className="w-56 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none"
+        />
+        <button
+          className={`btn ${canCreate ? "btn-primary" : "btn-disabled"}`}
+          disabled={!canCreate}
+          onClick={onCreate}
+        >
+          Create playlist
+        </button>
       </div>
     </div>
   );
