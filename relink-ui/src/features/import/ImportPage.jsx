@@ -116,7 +116,7 @@ export default function ImportPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  
+
 async function connectSpotify() {
   try {
     const { data: { session } } = await supabase.auth.getSession();
@@ -353,20 +353,25 @@ async function connectSpotify() {
         <header className="flex items-center justify-end gap-3 mb-3">
   {isSpotifyConnected ? (
     <>
-      <span className="chip">Connected: {spName}</span>
-      <button type="button" className="btn btn-neutral" onClick={disconnectSpotify}>
+      <span className="inline-flex items-center rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700">
+        Connected: {spName}
+      </span>
+      <button
+        type="button"
+        onClick={disconnectSpotify}
+        className="inline-flex items-center rounded-md border border-rose-500 px-3 py-1.5 text-sm font-medium text-rose-600 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-rose-400"
+      >
         Disconnect
       </button>
     </>
   ) : (
-    <a
-      className={`btn ${authToken ? "btn-primary" : "btn-disabled"}`}
-      href={authToken ? loginHref : undefined}
-      onClick={(e) => { if (!authToken) e.preventDefault(); }}
-      title={authToken ? "Connect your Spotify account" : "Loading auth…"}
+    <button
+      type="button"
+      onClick={connectSpotify}
+      className="inline-flex items-center rounded-md bg-[#1DB954] px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-[#17a64a] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#34D399]"
     >
       Connect Spotify
-    </a>
+    </button>
   )}
 </header>
 
