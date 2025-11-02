@@ -12,7 +12,8 @@ import DataTable from "./components/DataTable.jsx";
 import Stepper from "./components/Stepper.jsx";
 import Toolbar from "./components/Toolbar.jsx";
 import StickyBar from "./components/StickyBar.jsx";
-import ConnectSpotifyButton from './components/ConnectSpotifyButton';
+import ConnectSpotifyButton from "./components/ConnectSpotifyButton.jsx";
+
 
 
 import { API_BASE, authHeaders, safeJson } from "../../lib/api";
@@ -307,6 +308,7 @@ export default function ImportPage() {
     }
   }
 
+  
   // ---------------- Stepper (kropki) ----------------
   const filesDone     = rows.length > 0;
   const matchingDone  = rows.some(r => r.status === "ok");
@@ -322,14 +324,15 @@ export default function ImportPage() {
     <div className="min-h-screen w-full bg-slate-50 text-slate-900">
       {/* Hidden inputs */}
       <input ref={filesRef} type="file" className="sr-only" multiple accept="audio/*" onChange={onFilesSelected} />
-      <input
-        ref={folderRef}
-        type="file"
-        className="sr-only"
-        multiple
-        onChange={onFilesSelected}
-        {.../** @type {any} */ ({ webkitdirectory: "", directory: "" })}
-      />
+ <input
+  ref={folderRef}
+  type="file"
+  className="sr-only"
+  multiple
+  onChange={onFilesSelected}
+  {.../** @type {any} */ ({ webkitdirectory: "", directory: "" })}
+/>
+
 
       <div className="mx-auto max-w-[1440px] px-8 py-6">
         {/* Header: tytuł + connect/disconnect */}
@@ -343,6 +346,13 @@ export default function ImportPage() {
 
         {/* Stepper – na środku własny wiersz */}
         <div className="mt-4 flex justify-center">
+          <header className="flex items-center justify-between gap-3 mb-3">
+  <h1 className="text-xl font-semibold">ReLink</h1>
+  <div className="flex items-center gap-2">
+    <ConnectSpotifyButton />
+  </div>
+</header>
+
           <Stepper
             steps={["Files", "Matching", "Playlists"]}
             current={currentStep}

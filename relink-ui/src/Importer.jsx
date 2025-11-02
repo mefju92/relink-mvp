@@ -447,14 +447,15 @@ export default function Importer({ apiBase }) {
                 <button onClick={()=>folderRef.current?.click()} disabled={loadingFiles} style={{ padding:'6px 10px' }}>
                   {loadingFiles ? 'Ładowanie…' : 'Wybierz folder'}
                 </button>
-                <input
-                  ref={folderRef}
-                  type="file"
-                  className="sr-only"
-                  multiple
-                  onChange={onFilesSelected}
-                  {.../** @type {any} */ ({ webkitdirectory: "", directory: "" })}
-                />
+              <input
+  ref={folderRef}
+  type="file"
+  className="sr-only"
+  multiple
+  onChange={onFilesSelected}
+  {.../** @type {any} */ ({ webkitdirectory: "", directory: "" })}
+/>
+
 
                 <button onClick={()=>multiInputRef.current?.click()} disabled={loadingFiles} style={{ padding:'6px 10px' }}>
                   {loadingFiles ? 'Ładowanie…' : 'Wybierz pliki'}
