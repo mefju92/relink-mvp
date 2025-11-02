@@ -2,5 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* --- Buttons & chips (utility classes) --- */
+.btn { @apply inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-sm font-medium shadow-sm transition; }
+.btn-primary { @apply bg-emerald-600 border-emerald-700 text-white hover:bg-emerald-700 active:bg-emerald-800; }
+.btn-neutral  { @apply bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200 active:bg-slate-300; }
+.btn-disabled { @apply bg-slate-100 border-slate-200 text-slate-400 pointer-events-none opacity-60; }
+.chip { @apply inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700; }
+
+
 /* Reszta – minimalistyczne globalne ustawienia */
 html, body, #root { height: 100%; }

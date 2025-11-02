@@ -14,7 +14,13 @@ import Toolbar from "./components/Toolbar.jsx";
 import StickyBar from "./components/StickyBar.jsx";
 
 import { API_BASE, authHeaders, safeJson } from "../../lib/api";
-import { cleanTitle, cleanArtist, readTagFromName, measureDurationMs, msToMMSS } from "../../lib/tracks";
+import {
+  cleanTitle,
+  cleanArtist,
+  readTagFromName,
+  measureDurationMs,
+  msToMMSS,
+} from "../../lib/tracks";
 import { supabase } from "../../supabaseClient";
 
 export default function ImportPage() {
@@ -28,88 +34,69 @@ export default function ImportPage() {
   const [playlistName, setPlaylistName] = useState("");
   const [playlistDone, setPlaylistDone] = useState(false);
 
-  const [spName, setSpName] = useState(/** @type {string|null} */(null));
+  const [spName, setSpName] = useState(/** @type {string|null} */ (null));
   const isSpotifyConnected = !!spName;
 
-  // Supabase JWT (potrzebny do /spotify/login na backendzie)
-  const [authToken, setAuthToken] = useState("");
-  const loginFrontend = `${window.location.origin}/app?spotify=ok`;
-  const loginHref = authToken
-    ? `${API_BASE}/api/spotify/login?frontend=${encodeURIComponent(loginFrontend)}&token=${encodeURIComponent(authToken)}`
-    : "";
-
-  // Pickery plików/folderów
-  /** @type {import('react').RefObject<HTMLInputElement>} */ const filesRef  = useRef(null);
+  // pickery plików/folderów
+  /** @type {import('react').RefObject<HTMLInputElement>} */ const filesRef = useRef(null);
   /** @type {import('react').RefObject<HTMLInputElement>} */ const folderRef = useRef(null);
-  const openFiles  = () => filesRef.current?.click();
+  const openFiles = () => filesRef.current?.click();
   const openFolder = () => folderRef.current?.click();
 
-  // ================= Auth token (Supabase) =================
-  useEffect(() => {
-    let cancel = false;
-
-    async function loadToken() {
-      const { data } = await supabase.auth.getSession();
-      if (!cancel) setAuthToken(data.session?.access_token || "");
-    }
-    loadToken();
-
-    const sub = supabase.auth.onAuthStateChange((_evt, sess) => {
-      setAuthToken(sess?.access_token || "");
-    });
-
-    return () => {
-      cancel = true;
-      sub.data.subscription.unsubscribe();
-    };
-  }, []);
-
-  // ================= Spotify status =================
+  // ---------------- Spotify status ----------------
   async function refreshSpotifyStatus() {
     try {
       const headers = await authHeaders();
-      const res = await fetch(`${API_BASE}/api/spotify/status`, { headers });
-      const data = await safeJson(res);
+      const r = await fetch(`${API_BASE}/api/spotify/status`, { headers });
+      const txt = await r.text();
+      let data = null;
+      try {
+        data = JSON.parse(txt);
+      } catch {}
       setSpName(data?.connected ? (data?.name || "Connected") : null);
     } catch {
       setSpName(null);
     }
   }
 
-  // mount + powrót z ?spotify=ok + retry (sesja potrafi dojść chwilę później)
+  // mount + powrót z ?spotify=ok + subskrypcje
   useEffect(() => {
-    let cancelled = false;
-
-    const once = async () => {
-      await refreshSpotifyStatus();
-      if (cancelled) return;
-      // delikatny retry (np. po świeżym logowaniu)
-      for (let i = 0; i < 3 && !cancelled && !spName; i++) {
-        await wait(400);
-        await refreshSpotifyStatus();
-      }
-    };
-
-    // wyczyść znacznik z URL po powrocie ze Spotify
     const url = new URL(window.location.href);
     if (url.searchParams.get("spotify") === "ok") {
       url.searchParams.delete("spotify");
       window.history.replaceState({}, "", url.toString());
     }
 
-    once();
+    refreshSpotifyStatus();
 
     const sub = supabase.auth.onAuthStateChange(() => refreshSpotifyStatus());
     const onFocus = () => refreshSpotifyStatus();
     document.addEventListener("visibilitychange", onFocus);
 
     return () => {
-      cancelled = true;
       sub.data.subscription.unsubscribe();
       document.removeEventListener("visibilitychange", onFocus);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Przyciski: Connect / Disconnect
+  async function handleConnectClick() {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        alert("Najpierw zaloguj się.");
+        return;
+      }
+      const frontend = `${window.location.origin}/app?spotify=ok`;
+      const url = `${API_BASE}/api/spotify/login?frontend=${encodeURIComponent(
+        frontend
+      )}&token=${encodeURIComponent(token)}`;
+      window.location.assign(url);
+    } catch (e) {
+      alert("Błąd łączenia: " + (e?.message || e));
+    }
+  }
 
   async function disconnectSpotify() {
     if (!confirm("Odłączyć Spotify?")) return;
@@ -127,12 +114,12 @@ export default function ImportPage() {
     }
   }
 
-  // ================= Files -> rows =================
+  // ---------------- Files -> rows ----------------
   /** @param {File} file */
   async function toRow(file) {
     const { artist, title } = readTagFromName(file.name);
     const durationMs = await measureDurationMs(file);
-    return /** @type {UITrack} */({
+    return /** @type {UITrack} */ ({
       id: crypto.randomUUID?.() || String(Date.now() + Math.random()),
       file,
       title,
@@ -151,52 +138,57 @@ export default function ImportPage() {
   async function onFilesSelected(ev) {
     const files = Array.from(ev.currentTarget.files || []);
     if (!files.length) return;
-    const mapped = /** @type {UITrack[]} */(await Promise.all(files.map(toRow)));
-    setRows(prev => [...prev, ...mapped]);
+    const mapped = /** @type {UITrack[]} */ (await Promise.all(
+      files.map(toRow)
+    ));
+    setRows((prev) => [...prev, ...mapped]);
     setPlaylistDone(false);
     ev.currentTarget.value = ""; // reset inputa
   }
 
-  // ================= Filtering & sorting =================
+  // ---------------- Filtering & sorting ----------------
   const filtered = useMemo(() => {
     let list = rows;
     if (query) {
       const q = query.toLowerCase();
-      list = list.filter(r =>
-        (r.title  || "").toLowerCase().includes(q) ||
-        (r.artist || "").toLowerCase().includes(q) ||
-        (r.album  || "").toLowerCase().includes(q)
+      list = list.filter(
+        (r) =>
+          (r.title || "").toLowerCase().includes(q) ||
+          (r.artist || "").toLowerCase().includes(q) ||
+          (r.album || "").toLowerCase().includes(q)
       );
     }
-    if (filter === "matched")   list = list.filter(r => r.status === "ok");
-    if (filter === "unmatched") list = list.filter(r => r.status === "warn");
-    return [...list].sort((a, b) => String(a?.[sort] ?? "").localeCompare(String(b?.[sort] ?? "")));
+    if (filter === "matched") list = list.filter((r) => r.status === "ok");
+    if (filter === "unmatched") list = list.filter((r) => r.status === "warn");
+    return [...list].sort((a, b) =>
+      String(a?.[sort] ?? "").localeCompare(String(b?.[sort] ?? ""))
+    );
   }, [rows, query, filter, sort]);
 
   // wybór wierszy
   function toggleRow(id, val) {
-    setRows(prev => prev.map(r => (r.id === id ? { ...r, added: val } : r)));
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, added: val } : r)));
   }
   function toggleAllOnFiltered(val) {
-    const ids = new Set(filtered.map(r => r.id));
-    setRows(prev => prev.map(r => (ids.has(r.id) ? { ...r, added: val } : r)));
+    const ids = new Set(filtered.map((r) => r.id));
+    setRows((prev) => prev.map((r) => (ids.has(r.id) ? { ...r, added: val } : r)));
   }
-  const allSelected = filtered.length > 0 && filtered.every(r => r.added);
+  const allSelected = filtered.length > 0 && filtered.every((r) => r.added);
 
-  // ================= Matching =================
+  // ---------------- Matching ----------------
   async function runMatching() {
     if (!rows.length || isMatching || !isSpotifyConnected) return;
     setIsMatching(true);
     try {
       const payload = {
-        tracks: rows.map(r => ({
+        tracks: rows.map((r) => ({
           title: cleanTitle(r.title || ""),
           artist: cleanArtist(r.artist || ""),
           durationMs: r.durationMs || 0,
         })),
       };
 
-      // 1) start
+      // start
       const start = await fetch(`${API_BASE}/api/match`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await authHeaders()) },
@@ -208,32 +200,39 @@ export default function ImportPage() {
         throw new Error(`Match start failed: ${msg}`);
       }
 
-      // 2) polling
+      // polling
       for (;;) {
-        const res  = await fetch(`${API_BASE}/api/match/progress`, { headers: { ...(await authHeaders()) } });
+        const res = await fetch(`${API_BASE}/api/match/progress`, {
+          headers: { ...(await authHeaders()) },
+        });
         const data = await safeJson(res);
 
         if (!data.exists) break;
         if (data.error) throw new Error(data.error);
-        if (!data.done) { await wait(600); continue; }
+        if (!data.done) {
+          await wait(600);
+          continue;
+        }
 
-        // 3) wyniki
+        // wyniki
         const results = data.results?.results || [];
-        setRows(prev => prev.map((r, i) => {
-          const m = results[i];
-          if (!m || !m.matched) {
-            return { ...r, status: "warn", spotifyUrl: "", spotifyId: "" };
-          }
-          return {
-            ...r,
-            status:    "ok",
-            spotifyUrl: m.spotifyUrl || r.spotifyUrl,
-            spotifyId:  m.spotifyId || r.spotifyId,
-            artist:     r.artist || m.artists || r.artist,
-            album:      r.album  || m.album   || r.album,
-            time:       r.time   || (m.durationMs ? msToMMSS(m.durationMs) : r.time),
-          };
-        }));
+        setRows((prev) =>
+          prev.map((r, i) => {
+            const m = results[i];
+            if (!m || !m.matched) {
+              return { ...r, status: "warn", spotifyUrl: "", spotifyId: "" };
+            }
+            return {
+              ...r,
+              status: "ok",
+              spotifyUrl: m.spotifyUrl || r.spotifyUrl,
+              spotifyId: m.spotifyId || r.spotifyId,
+              artist: r.artist || m.artists || r.artist,
+              album: r.album || m.album || r.album,
+              time: r.time || (m.durationMs ? msToMMSS(m.durationMs) : r.time),
+            };
+          })
+        );
         break;
       }
     } catch (e) {
@@ -244,49 +243,45 @@ export default function ImportPage() {
     }
   }
 
-  // ================= Upload / Delete / Playlist =================
+  // ---------------- Upload / Delete / Playlist ----------------
   async function uploadToCloud() {
-    const files = rows.filter(r => r.added && r.file).map(r => r.file);
+    const files = rows.filter((r) => r.added && r.file).map((r) => r.file);
     if (!files.length) return alert("Zaznacz pliki do chmury.");
 
     const form = new FormData();
-    files.forEach(f => form.append("files", f, f.name));
+    files.forEach((f) => form.append("files", f, f.name));
 
     try {
-      const res  = await fetch(`${API_BASE}/api/upload`, {
+      const res = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
         headers: { ...(await authHeaders()) },
         body: form,
       });
       const data = await safeJson(res);
       if (!res.ok || data?.ok === false) throw new Error(data.error || "upload failed");
-      alert(`Przeniesiono ${data.files?.filter(x => x.ok).length ?? files.length} plików`);
+      alert(
+        `Przeniesiono ${data.files?.filter((x) => x.ok).length ?? files.length} plików`
+      );
     } catch (e) {
       alert(e.message || "Upload failed");
     }
   }
 
   async function deleteSelected() {
-    const ids = rows.filter(r => r.added).map(r => r.id);
+    const ids = rows.filter((r) => r.added).map((r) => r.id);
     if (!ids.length) return;
-    setRows(prev => prev.filter(r => !ids.includes(r.id)));
-    try {
-      await fetch(`${API_BASE}/files`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-        body: JSON.stringify({ ids }),
-      });
-    } catch (e) {
-      console.warn("Delete API failed:", e);
-    }
+    setRows((prev) => prev.filter((r) => !ids.includes(r.id)));
+    // (opcjonalnie) możesz dodać tu API do czyszczenia backendu, jeśli je obsługujesz
   }
 
   async function createPlaylist(name) {
-    const uris = rows.filter(r => r.added && r.spotifyId).map(r => `spotify:track:${r.spotifyId}`);
+    const uris = rows
+      .filter((r) => r.added && r.spotifyId)
+      .map((r) => `spotify:track:${r.spotifyId}`);
     if (!uris.length) return alert("Zaznacz dopasowane utwory.");
     if (!name.trim()) return alert("Podaj nazwę playlisty.");
     try {
-      const res  = await fetch(`${API_BASE}/api/playlist`, {
+      const res = await fetch(`${API_BASE}/api/playlist`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify({ name, trackUris: uris }),
@@ -294,23 +289,24 @@ export default function ImportPage() {
       const data = await safeJson(res);
       if (!res.ok || data?.ok === false) throw new Error(data.error || "playlist failed");
       setPlaylistDone(true);
-      if (data.playlistUrl) window.open(data.playlistUrl, "_blank", "noreferrer");
+      if (data.playlistUrl)
+        window.open(data.playlistUrl, "_blank", "noreferrer");
       else alert("Playlist utworzona.");
     } catch (e) {
       alert(e.message || "Create playlist failed");
     }
   }
 
-  // ================= Stepper (kropki) =================
-  const filesDone     = rows.length > 0;
-  const matchingDone  = rows.some(r => r.status === "ok");
+  // ---------------- Stepper (kropki) ----------------
+  const filesDone = rows.length > 0;
+  const matchingDone = rows.some((r) => r.status === "ok");
   const playlistsDone = playlistDone;
 
-  // Uwaga: Stepper jest 1-based
+  // Stepper jest 1-based
   const currentStep = !filesDone ? 1 : !matchingDone ? 2 : 3;
 
   const showEmpty = rows.length === 0 && !query;
-  const selectedMatched = rows.filter(r => r.added && r.status === "ok");
+  const selectedMatched = rows.filter((r) => r.added && r.status === "ok");
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-900">
@@ -333,24 +329,27 @@ export default function ImportPage() {
       />
 
       <div className="mx-auto max-w-[1440px] px-8 py-6">
-        {/* Header: tylko prawy blok z połączeniem Spotify */}
+        {/* Header: connect/disconnect */}
         <header className="flex items-center justify-end gap-3 mb-3">
           {isSpotifyConnected ? (
             <>
               <span className="chip">Connected: {spName}</span>
-              <button type="button" className="btn btn-neutral" onClick={disconnectSpotify}>
+              <button
+                type="button"
+                className="btn btn-neutral"
+                onClick={disconnectSpotify}
+              >
                 Disconnect
               </button>
             </>
           ) : (
-            <a
-              className={`btn ${authToken ? "btn-primary" : "btn-disabled"}`}
-              href={authToken ? loginHref : undefined}
-              onClick={(e) => { if (!authToken) e.preventDefault(); }}
-              title={authToken ? "Connect your Spotify account" : "Loading auth…"}
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleConnectClick}
             >
               Connect Spotify
-            </a>
+            </button>
           )}
         </header>
 
@@ -368,8 +367,8 @@ export default function ImportPage() {
             onQueryChange={setQuery}
             counts={{
               total: rows.length,
-              matched: rows.filter(r => r.status === "ok").length,
-              unmatched: rows.filter(r => r.status === "warn").length,
+              matched: rows.filter((r) => r.status === "ok").length,
+              unmatched: rows.filter((r) => r.status === "warn").length,
             }}
             filter={filter}
             onFilterChange={(v) => setFilter(v)}
@@ -395,13 +394,17 @@ export default function ImportPage() {
               allSelected={allSelected}
             />
             <StickyBar
-              selected={rows.filter(r => r.added).length}
+              selected={rows.filter((r) => r.added).length}
               onUpload={uploadToCloud}
               onUndo={() => window.history.back()}
               onDelete={deleteSelected}
               playlistName={playlistName}
               onPlaylistNameChange={setPlaylistName}
-              canCreate={isSpotifyConnected && selectedMatched.length > 0 && !!playlistName.trim()}
+              canCreate={
+                isSpotifyConnected &&
+                selectedMatched.length > 0 &&
+                !!playlistName.trim()
+              }
               onCreate={() => createPlaylist(playlistName)}
             />
           </>
@@ -421,4 +424,6 @@ export default function ImportPage() {
 }
 
 /** utils */
-function wait(ms){ return new Promise(r => setTimeout(r, ms)); }
+function wait(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
