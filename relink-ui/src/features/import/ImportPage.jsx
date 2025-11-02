@@ -12,7 +12,6 @@ import DataTable from "./components/DataTable.jsx";
 import Stepper from "./components/Stepper.jsx";
 import Toolbar from "./components/Toolbar.jsx";
 import StickyBar from "./components/StickyBar.jsx";
-import ConnectSpotifyButton from "./components/ConnectSpotifyButton.jsx";
 
 
 
@@ -336,21 +335,24 @@ export default function ImportPage() {
 
       <div className="mx-auto max-w-[1440px] px-8 py-6">
         {/* Header: tytuł + connect/disconnect */}
-        <header className="relative z-10 flex items-center justify-between">
-          <h1 className="text-xl font-bold">ReLink</h1>
-
-          <div className="flex items-center gap-3">
-            
-          </div>
-        </header>
-
-        {/* Stepper – na środku własny wiersz */}
-        <div className="mt-4 flex justify-center">
-          <header className="flex items-center justify-between gap-3 mb-3">
-  <h1 className="text-xl font-semibold">ReLink</h1>
-  <div className="flex items-center gap-2">
-    <ConnectSpotifyButton />
-  </div>
+        <header className="flex items-center justify-end gap-3 mb-3">
+  {isSpotifyConnected ? (
+    <>
+      <span className="chip">Connected: {spName}</span>
+      <button type="button" className="btn btn-neutral" onClick={disconnectSpotify}>
+        Disconnect
+      </button>
+    </>
+  ) : (
+    <a
+      className={`btn ${authToken ? "btn-primary" : "btn-disabled"}`}
+      href={authToken ? loginHref : undefined}
+      onClick={(e) => { if (!authToken) e.preventDefault(); }}
+      title={authToken ? "Connect your Spotify account" : "Loading auth…"}
+    >
+      Connect Spotify
+    </a>
+  )}
 </header>
 
           <Stepper
@@ -406,17 +408,16 @@ export default function ImportPage() {
             </>
           )}
 
-          {isMatching && (
-            <div className="absolute inset-0 grid place-items-center bg-white/60 backdrop-blur-sm">
-              <div className="rounded-xl border border-[var(--border)] bg-white px-4 py-3 text-sm text-slate-600 shadow-card">
-                <span className="inline-block h-4 w-4 animate-spin border-2 border-slate-300 border-t-slate-600 rounded-full mr-2" />
-                Matching in progress…
-              </div>
-            </div>
-          )}
+         {isMatching && (
+  <div className="absolute inset-0 grid place-items-center bg-white/60 backdrop-blur-sm">
+    <div className="rounded-xl border border-[var(--border)] bg-white px-4 py-3 text-sm text-slate-600 shadow-card">
+      <span className="inline-block h-4 w-4 animate-spin border-2 border-slate-300 border-t-slate-600 rounded-full mr-2" />
+      Matching in progress…
+    </div>
+  </div>
+)}
         </section>
       </div>
-    </div>
   );
 }
 
