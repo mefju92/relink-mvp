@@ -13,8 +13,6 @@ import Stepper from "./components/Stepper.jsx";
 import Toolbar from "./components/Toolbar.jsx";
 import StickyBar from "./components/StickyBar.jsx";
 
-
-
 import { API_BASE, authHeaders, safeJson } from "../../lib/api";
 import { cleanTitle, cleanArtist, readTagFromName, measureDurationMs, msToMMSS } from "../../lib/tracks";
 import { supabase } from "../../supabaseClient";
@@ -22,9 +20,9 @@ import { supabase } from "../../supabaseClient";
 export default function ImportPage() {
   /** @type {[UITrack[], import('react').Dispatch<import('react').SetStateAction<UITrack[]>>]} */
   const [rows, setRows] = useState([]);
-  const [query, setQuery]   = useState("");
-  const [filter, setFilter] = useState(/** @type {FilterKey} */("all"));
-  const [sort, setSort]     = useState(/** @type {SortKey}   */("title"));
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState(/** @type {FilterKey} */ ("all"));
+  const [sort, setSort] = useState(/** @type {SortKey} */ ("title"));
 
   const [isMatching, setIsMatching] = useState(false);
   const [playlistName, setPlaylistName] = useState("");
@@ -33,20 +31,20 @@ export default function ImportPage() {
   const [spName, setSpName] = useState(/** @type {string|null} */(null));
   const isSpotifyConnected = !!spName;
 
-  // token Supabase do linku logowania
+  // Supabase JWT (potrzebny do /spotify/login na backendzie)
   const [authToken, setAuthToken] = useState("");
   const loginFrontend = `${window.location.origin}/app?spotify=ok`;
   const loginHref = authToken
-    ? `${API_BASE}/spotify/login?frontend=${encodeURIComponent(loginFrontend)}&token=${encodeURIComponent(authToken)}`
+    ? `${API_BASE}/api/spotify/login?frontend=${encodeURIComponent(loginFrontend)}&token=${encodeURIComponent(authToken)}`
     : "";
 
-  // pickery plików/folderów
+  // Pickery plików/folderów
   /** @type {import('react').RefObject<HTMLInputElement>} */ const filesRef  = useRef(null);
   /** @type {import('react').RefObject<HTMLInputElement>} */ const folderRef = useRef(null);
   const openFiles  = () => filesRef.current?.click();
   const openFolder = () => folderRef.current?.click();
 
-  // ---------------- Auth token (Supabase) ----------------
+  // ================= Auth token (Supabase) =================
   useEffect(() => {
     let cancel = false;
 
@@ -66,17 +64,12 @@ export default function ImportPage() {
     };
   }, []);
 
-  // ---------------- Spotify status ----------------
+  // ================= Spotify status =================
   async function refreshSpotifyStatus() {
     try {
       const headers = await authHeaders();
-      const res = await fetch(`${API_BASE}/spotify/status`, { headers });
-      const txt = await res.text();
-      // DEBUG – podejrzyj w Network/Console co wraca; usuń później
-      console.log("[spotify/status]", res.status, txt);
-
-      let data = null;
-      try { data = JSON.parse(txt); } catch {}
+      const res = await fetch(`${API_BASE}/api/spotify/status`, { headers });
+      const data = await safeJson(res);
       setSpName(data?.connected ? (data?.name || "Connected") : null);
     } catch {
       setSpName(null);
@@ -90,13 +83,14 @@ export default function ImportPage() {
     const once = async () => {
       await refreshSpotifyStatus();
       if (cancelled) return;
+      // delikatny retry (np. po świeżym logowaniu)
       for (let i = 0; i < 3 && !cancelled && !spName; i++) {
         await wait(400);
         await refreshSpotifyStatus();
       }
     };
 
-    // wyczyść znacznik z URL po powrocie
+    // wyczyść znacznik z URL po powrocie ze Spotify
     const url = new URL(window.location.href);
     if (url.searchParams.get("spotify") === "ok") {
       url.searchParams.delete("spotify");
@@ -117,25 +111,10 @@ export default function ImportPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-async function connectSpotify() {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const jwt = session?.access_token;
-    if (!jwt) { alert("Najpierw zaloguj się."); return; }
-
-    const frontend = `${window.location.origin}/app`; // dokąd wracamy po OAuth
-    const url = `${API_BASE}/spotify/login?token=${encodeURIComponent(jwt)}&frontend=${encodeURIComponent(frontend)}`;
-    window.location.assign(url);
-  } catch (e) {
-    alert("Błąd: " + (e?.message || e));
-  }
-}
-
-
   async function disconnectSpotify() {
     if (!confirm("Odłączyć Spotify?")) return;
     try {
-      const res = await fetch(`${API_BASE}/spotify/disconnect`, {
+      const res = await fetch(`${API_BASE}/api/spotify/disconnect`, {
         method: "POST",
         headers: { ...(await authHeaders()) },
       });
@@ -148,7 +127,7 @@ async function connectSpotify() {
     }
   }
 
-  // ---------------- Files -> rows ----------------
+  // ================= Files -> rows =================
   /** @param {File} file */
   async function toRow(file) {
     const { artist, title } = readTagFromName(file.name);
@@ -178,7 +157,7 @@ async function connectSpotify() {
     ev.currentTarget.value = ""; // reset inputa
   }
 
-  // ---------------- Filtering & sorting ----------------
+  // ================= Filtering & sorting =================
   const filtered = useMemo(() => {
     let list = rows;
     if (query) {
@@ -204,7 +183,7 @@ async function connectSpotify() {
   }
   const allSelected = filtered.length > 0 && filtered.every(r => r.added);
 
-  // ---------------- Matching ----------------
+  // ================= Matching =================
   async function runMatching() {
     if (!rows.length || isMatching || !isSpotifyConnected) return;
     setIsMatching(true);
@@ -218,7 +197,7 @@ async function connectSpotify() {
       };
 
       // 1) start
-      const start = await fetch(`${API_BASE}/match`, {
+      const start = await fetch(`${API_BASE}/api/match`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify(payload),
@@ -231,7 +210,7 @@ async function connectSpotify() {
 
       // 2) polling
       for (;;) {
-        const res  = await fetch(`${API_BASE}/match/progress`, { headers: { ...(await authHeaders()) } });
+        const res  = await fetch(`${API_BASE}/api/match/progress`, { headers: { ...(await authHeaders()) } });
         const data = await safeJson(res);
 
         if (!data.exists) break;
@@ -247,12 +226,12 @@ async function connectSpotify() {
           }
           return {
             ...r,
-            status: "ok",
+            status:    "ok",
             spotifyUrl: m.spotifyUrl || r.spotifyUrl,
-            spotifyId: m.spotifyId || r.spotifyId,
-            artist:    r.artist || m.artists || r.artist,
-            album:     r.album  || m.album   || r.album,
-            time:      r.time   || (m.durationMs ? msToMMSS(m.durationMs) : r.time),
+            spotifyId:  m.spotifyId || r.spotifyId,
+            artist:     r.artist || m.artists || r.artist,
+            album:      r.album  || m.album   || r.album,
+            time:       r.time   || (m.durationMs ? msToMMSS(m.durationMs) : r.time),
           };
         }));
         break;
@@ -265,7 +244,7 @@ async function connectSpotify() {
     }
   }
 
-  // ---------------- Upload / Delete / Playlist ----------------
+  // ================= Upload / Delete / Playlist =================
   async function uploadToCloud() {
     const files = rows.filter(r => r.added && r.file).map(r => r.file);
     if (!files.length) return alert("Zaznacz pliki do chmury.");
@@ -274,7 +253,7 @@ async function connectSpotify() {
     files.forEach(f => form.append("files", f, f.name));
 
     try {
-      const res  = await fetch(`${API_BASE}/upload`, {
+      const res  = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
         headers: { ...(await authHeaders()) },
         body: form,
@@ -307,7 +286,7 @@ async function connectSpotify() {
     if (!uris.length) return alert("Zaznacz dopasowane utwory.");
     if (!name.trim()) return alert("Podaj nazwę playlisty.");
     try {
-      const res  = await fetch(`${API_BASE}/playlist`, {
+      const res  = await fetch(`${API_BASE}/api/playlist`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify({ name, trackUris: uris }),
@@ -322,8 +301,7 @@ async function connectSpotify() {
     }
   }
 
-  
-  // ---------------- Stepper (kropki) ----------------
+  // ================= Stepper (kropki) =================
   const filesDone     = rows.length > 0;
   const matchingDone  = rows.some(r => r.status === "ok");
   const playlistsDone = playlistDone;
@@ -337,107 +315,108 @@ async function connectSpotify() {
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-900">
       {/* Hidden inputs */}
-      <input ref={filesRef} type="file" className="sr-only" multiple accept="audio/*" onChange={onFilesSelected} />
- <input
-  ref={folderRef}
-  type="file"
-  className="sr-only"
-  multiple
-  onChange={onFilesSelected}
-  {.../** @type {any} */ ({ webkitdirectory: "", directory: "" })}
-/>
-
+      <input
+        ref={filesRef}
+        type="file"
+        className="sr-only"
+        multiple
+        accept="audio/*"
+        onChange={onFilesSelected}
+      />
+      <input
+        ref={folderRef}
+        type="file"
+        className="sr-only"
+        multiple
+        onChange={onFilesSelected}
+        {.../** @type {any} */ ({ webkitdirectory: "", directory: "" })}
+      />
 
       <div className="mx-auto max-w-[1440px] px-8 py-6">
-        {/* Header: tytuł + connect/disconnect */}
+        {/* Header: tylko prawy blok z połączeniem Spotify */}
         <header className="flex items-center justify-end gap-3 mb-3">
-  {isSpotifyConnected ? (
-    <>
-      <span className="inline-flex items-center rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700">
-        Connected: {spName}
-      </span>
-      <button
-        type="button"
-        onClick={disconnectSpotify}
-        className="inline-flex items-center rounded-md border border-rose-500 px-3 py-1.5 text-sm font-medium text-rose-600 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-rose-400"
-      >
-        Disconnect
-      </button>
-    </>
-  ) : (
-    <button
-      type="button"
-      onClick={connectSpotify}
-      className="inline-flex items-center rounded-md bg-[#1DB954] px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-[#17a64a] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#34D399]"
-    >
-      Connect Spotify
-    </button>
-  )}
-</header>
+          {isSpotifyConnected ? (
+            <>
+              <span className="chip">Connected: {spName}</span>
+              <button type="button" className="btn btn-neutral" onClick={disconnectSpotify}>
+                Disconnect
+              </button>
+            </>
+          ) : (
+            <a
+              className={`btn ${authToken ? "btn-primary" : "btn-disabled"}`}
+              href={authToken ? loginHref : undefined}
+              onClick={(e) => { if (!authToken) e.preventDefault(); }}
+              title={authToken ? "Connect your Spotify account" : "Loading auth…"}
+            >
+              Connect Spotify
+            </a>
+          )}
+        </header>
 
-          <Stepper
-            steps={["Files", "Matching", "Playlists"]}
-            current={currentStep}
-            done={[filesDone, matchingDone, playlistsDone]}
+        <Stepper
+          steps={["Files", "Matching", "Playlists"]}
+          current={currentStep}
+          done={[filesDone, matchingDone, playlistsDone]}
+        />
+      </div>
+
+      <section className="mt-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-white shadow-card relative">
+        <div className="border-b border-[var(--border)] p-4">
+          <Toolbar
+            query={query}
+            onQueryChange={setQuery}
+            counts={{
+              total: rows.length,
+              matched: rows.filter(r => r.status === "ok").length,
+              unmatched: rows.filter(r => r.status === "warn").length,
+            }}
+            filter={filter}
+            onFilterChange={(v) => setFilter(v)}
+            onSortClick={() => setSort("title")}
+            onSelectAll={() => toggleAllOnFiltered(true)}
+            onAddFiles={openFiles}
+            onAddFolder={openFolder}
+            onMatch={runMatching}
+            canMatch={rows.length > 0}
+            isMatching={isMatching}
+            isSpotifyConnected={isSpotifyConnected}
           />
         </div>
 
-        <section className="mt-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-white shadow-card relative">
-          <div className="border-b border-[var(--border)] p-4">
-            <Toolbar
-              query={query}
-              onQueryChange={setQuery}
-              counts={{
-                total: rows.length,
-                matched: rows.filter(r => r.status === "ok").length,
-                unmatched: rows.filter(r => r.status === "warn").length,
-              }}
-              filter={filter}
-              onFilterChange={(v) => setFilter(v)}
-              onSortClick={() => setSort("title")}
-              onSelectAll={() => toggleAllOnFiltered(true)}
-              onAddFiles={openFiles}
-              onAddFolder={openFolder}
-              onMatch={runMatching}
-              canMatch={rows.length > 0}
-              isMatching={isMatching}
-              isSpotifyConnected={isSpotifyConnected}
+        {showEmpty ? (
+          <EmptyState onAddFiles={openFiles} onAddFolder={openFolder} />
+        ) : (
+          <>
+            <DataTable
+              rows={filtered}
+              onToggleRow={toggleRow}
+              onToggleAll={toggleAllOnFiltered}
+              allSelected={allSelected}
             />
+            <StickyBar
+              selected={rows.filter(r => r.added).length}
+              onUpload={uploadToCloud}
+              onUndo={() => window.history.back()}
+              onDelete={deleteSelected}
+              playlistName={playlistName}
+              onPlaylistNameChange={setPlaylistName}
+              canCreate={isSpotifyConnected && selectedMatched.length > 0 && !!playlistName.trim()}
+              onCreate={() => createPlaylist(playlistName)}
+            />
+          </>
+        )}
+
+        {isMatching && (
+          <div className="absolute inset-0 grid place-items-center bg-white/60 backdrop-blur-sm">
+            <div className="rounded-xl border border-[var(--border)] bg-white px-4 py-3 text-sm text-slate-600 shadow-card">
+              <span className="inline-block h-4 w-4 animate-spin border-2 border-slate-300 border-t-slate-600 rounded-full mr-2" />
+              Matching in progress…
+            </div>
           </div>
-
-          {showEmpty ? (
-            <EmptyState onAddFiles={openFiles} onAddFolder={openFolder} />
-          ) : (
-            <>
-              <DataTable
-                rows={filtered}
-                onToggleRow={toggleRow}
-                onToggleAll={toggleAllOnFiltered}
-                allSelected={allSelected}
-              />
-              <StickyBar
-                selected={rows.filter(r => r.added).length}
-                onUpload={uploadToCloud}
-                onUndo={() => window.history.back()}
-                onDelete={deleteSelected}
-                playlistName={playlistName}
-                onPlaylistNameChange={setPlaylistName}
-                canCreate={isSpotifyConnected && selectedMatched.length > 0 && !!playlistName.trim()}
-                onCreate={() => createPlaylist(playlistName)}
-              />
-            </>
-          )}
-
-         {isMatching && (
-  <div className="absolute inset-0 grid place-items-center bg-white/60 backdrop-blur-sm">
-    <div className="rounded-xl border border-[var(--border)] bg-white px-4 py-3 text-sm text-slate-600 shadow-card">
-      <span className="inline-block h-4 w-4 animate-spin border-2 border-slate-300 border-t-slate-600 rounded-full mr-2" />
-      Matching in progress…
+        )}
+      </section>
     </div>
-  </div>
-)}
-        </section>
-      </div>
   );
 }
 

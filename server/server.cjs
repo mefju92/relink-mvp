@@ -3,10 +3,12 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 
+// użyj node-fetch w CommonJS (działa też w Node <18)
 const fetch = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 
-// Storage dla progressu dopasowywania (in-memory)
-const matchProgress = new Map(); // userId -> { current, total, results, done }
+// ================== In-memory progress store ==================
+/** userId -> { current, total, results, done, error } */
+const matchProgress = new Map();
 
 const {
   PORT = 5174,
@@ -22,28 +24,48 @@ const {
 
 const app = express();
 
+// ================== CORS / JSON ==================
 app.use((req, res, next) => {
   const allowOrigin = CORS_ORIGIN || req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', allowOrigin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Credentials', 'false');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 
 app.use(express.json({ limit: '20mb' }));
 
+// ================== Utils ==================
 function getBaseUrl(req) {
   const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   return `${proto}://${host}`;
 }
 
+// wykryj czy ścieżka była wołana przez /api/... (do poprawnego redirect_uri)
+function computeRedirectUri(req) {
+  const isApi = (req.originalUrl || req.url || '').startsWith('/api/');
+  return `${getBaseUrl(req)}${isApi ? '/api' : ''}/spotify/callback`;
+}
+
+// ================== Supabase (service role) ==================
 const { createClient } = require('@supabase/supabase-js');
 const supa = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// Autoryzacja przez Bearer Supabase JWT
+async function requireAuth(req, res, next) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!token) return res.status(401).json({ ok: false, error: 'missing token' });
+  const { data, error } = await supa.auth.getUser(token);
+  if (error || !data?.user) return res.status(401).json({ ok: false, error: 'invalid token' });
+  req.user = data.user; // { id, ... }
+  next();
+}
+
+// ================== Spotify helpers ==================
 async function getUserSpotifyAccessTokenByUserId(userId) {
   const { data, error } = await supa
     .from(USER_LINKS_TABLE)
@@ -51,6 +73,7 @@ async function getUserSpotifyAccessTokenByUserId(userId) {
     .eq('user_id', userId)
     .maybeSingle();
   if (error) throw error;
+
   const refresh = data?.spotify_refresh_token;
   if (!refresh) {
     const e = new Error('NO_LINK: user not connected to Spotify');
@@ -85,14 +108,23 @@ async function getSpotifyMe(accessToken) {
   return j;
 }
 
-// ========== ULEPSZONE FUNKCJE NORMALIZACJI ==========
+// ================== Normalizacja / dopasowanie ==================
+function jaccard(a, b) {
+  const A = new Set(String(a || '').toLowerCase().split(/\s+/).filter(Boolean));
+  const B = new Set(String(b || '').toLowerCase().split(/\s+/).filter(Boolean));
+  const I = new Set([...A].filter(x => B.has(x))).size;
+  const U = new Set([...A, ...B]).size || 1;
+  return I / U;
+}
+
+function normArtist(a) { 
+  return (a || '').toLowerCase().replace(/\s+/g, ' ').trim(); 
+}
 
 function coreTitle(s) {
   if (!s) return '';
-  
   let cleaned = (s || '')
     .toLowerCase()
-    // Usuń TYLKO oczywisty szum
     .replace(/\b(out\s*now)\b/gi, '')
     .replace(/\[\s*out\s*now\s*\]/gi, '')
     .replace(/\bofficial\s+(?:music\s+)?video\b/gi, '')
@@ -100,164 +132,96 @@ function coreTitle(s) {
     .replace(/\b(hd|hq|4k|8k)\b/gi, '')
     .replace(/\blyrics?\b/gi, '')
     .replace(/\blyric\s+video\b/gi, '')
-    .replace(/\(\d{4}\)/g, '') // usuń rok w nawiasach
-    .replace(/\d{3,4}p/gi, '') // usuń 1080p, 720p
-    // Usuń "Copy (1)", "Copy (2)" itp.
+    .replace(/\(\d{4}\)/g, '')
+    .replace(/\d{3,4}p/gi, '')
     .replace(/\s*-?\s*copy\s*\(\d+\)\s*$/i, '')
     .replace(/\s*\(\s*copy\s*\d*\s*\)/gi, '')
-    // Usuń TYLKO puste nawiasy
-    .replace(/\(\s*\)/g, '')
-    .replace(/\[\s*\]/g, '')
-    .replace(/\{\s*\}/g, '')
-    // Czyść spacje
+    .replace(/\(\s*\)|\[\s*\]|\{\s*\}/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-    
   return cleaned;
 }
 
-function normArtist(a) { 
-  return (a || '').toLowerCase().replace(/\s+/g, ' ').trim(); 
-}
-
-// NOWE: Rozdzielanie artystów po feat/ft/&/x/vs
 function splitArtists(artistRaw) {
   if (!artistRaw) return [];
   const normalized = normArtist(artistRaw);
-  // Rozdziel po typowych separatorach
   return normalized
     .split(/\s*(?:,|&|x|vs\.?|versus|feat\.?|ft\.?|featuring|with)\s*/i)
     .map(a => a.trim())
     .filter(Boolean);
 }
 
-// NOWE: Oblicz overlap artystów (lepsze niż prosty jaccard)
 function artistOverlap(localArtist, spotifyArtists) {
   const localTokens = splitArtists(localArtist);
-  const spotifyTokens = spotifyArtists.map(a => normArtist(a.name));
-  
-  if (localTokens.length === 0) return 0.5; // fallback gdy brak artysty
-  
+  const spotifyTokens = (spotifyArtists || []).map(a => normArtist(a.name));
+  if (localTokens.length === 0) return 0.5;
   let matches = 0;
   for (const local of localTokens) {
-    for (const spotify of spotifyTokens) {
-      if (jaccard(local, spotify) > 0.6) {
-        matches++;
-        break;
-      }
+    for (const sp of spotifyTokens) {
+      if (jaccard(local, sp) > 0.6) { matches++; break; }
     }
   }
-  
   return matches / localTokens.length;
 }
 
-function jaccard(a, b) {
-  const A = new Set(a.split(' '));
-  const B = new Set(b.split(' '));
-  const I = new Set([...A].filter(x => B.has(x))).size;
-  const U = new Set([...A, ...B]).size || 1;
-  return I / U;
-}
-
 function durationScore(localMs, spMs) {
-  if (!localMs || !spMs) return 0.6; // wyższy fallback
+  if (!localMs || !spMs) return 0.6;
   const diff = Math.abs(localMs - spMs);
-  if (diff <= 2000) return 1.0;    // ±2s
-  if (diff <= 5000) return 0.95;   // ±5s
-  if (diff <= 10000) return 0.85;  // ±10s
-  if (diff <= 20000) return 0.7;   // ±20s
-  if (diff <= 30000) return 0.55;  // ±30s
+  if (diff <= 2000)  return 1.0;
+  if (diff <= 5000)  return 0.95;
+  if (diff <= 10000) return 0.85;
+  if (diff <= 20000) return 0.7;
+  if (diff <= 30000) return 0.55;
   return 0.4;
 }
 
-// ULEPSZONE: Lepszy scoring z overlap artystów i bonusem za remix
 function scoreCandidate(local, sp) {
   const tLocal = coreTitle(local.title);
-  const tSp = coreTitle(sp.name);
-  const aLocal = normArtist(local.artist || '');
-  const spArtists = sp.artists || [];
-  
-  // Score tytułu
-  const titleScore = jaccard(tLocal, tSp);
-  
-  // Score artysty - użyj overlap zamiast prostego jaccard
-  const artistScore = aLocal ? artistOverlap(local.artist, spArtists) : 0.5;
-  
-  // Score czasu trwania
-  const durScore = durationScore(local.durationMs, sp.duration_ms);
-  
-  // Bonus za dokładne dopasowanie remixu
+  const tSp    = coreTitle(sp.name);
+  const titleScore  = jaccard(tLocal, tSp);
+  const artistScore = local.artist ? artistOverlap(local.artist, sp.artists || []) : 0.5;
+  const durScore    = durationScore(local.durationMs, sp.duration_ms);
+
   const localHasRemix = /\b(remix|edit)\b/i.test(local.title || '');
-  const spHasRemix = /\b(remix|edit)\b/i.test(sp.name || '');
-  const remixBonus = (localHasRemix && spHasRemix) ? 0.05 : 0;
-  
-  // NOWE WAGI: 50% tytuł, 40% artysta, 10% czas
+  const spHasRemix    = /\b(remix|edit)\b/i.test(sp.name || '');
+  const remixBonus    = (localHasRemix && spHasRemix) ? 0.05 : 0;
+
   return Math.min(1.0, 0.50 * titleScore + 0.40 * artistScore + 0.10 * durScore + remixBonus);
 }
 
-// NOWE: Budowanie wielu wariantów zapytań
 function buildSearchQueries(track) {
   let title = coreTitle(track.title || '');
   let artist = normArtist(track.artist || '');
   const artists = splitArtists(track.artist || '');
-  
-  // NOWE: Usuń label/wydawcę z końca tytułu (np. "- Guesthouse Music")
+
+  // usuń np. "- Records" z końca
   title = title.replace(/\s*-\s*(music|records|recordings|label|entertainment)$/i, '').trim();
-  
-  // NOWE: Wyciągnij feat/ft z tytułu do artysty
+
+  // feat z tytułu do artysty (gdy sensowne)
   const featMatch = title.match(/\b(?:feat\.?|ft\.?|featuring)\s+([^()]+?)(?:\)|$)/i);
   if (featMatch && artists.length === 1) {
     const featArtist = featMatch[1].trim();
     artists.push(featArtist);
-    // Usuń feat z tytułu
     title = title.replace(/\s*[\(\[]?\s*(?:feat\.?|ft\.?|featuring)\s+[^()\]]+[\)\]]?/gi, '').trim();
   }
-  
-  // Wykryj czy to remix/edit
-  const hasRemix = /\b(remix|edit|mix|bootleg|mashup|vip)\b/i.test(title);
-  const titleNoRemix = title.replace(/\b(remix|edit|mix|bootleg|mashup|vip)\b/gi, '').trim();
-  
-  // Warianty z nawiasami i bez
-  const titleNoBrackets = title.replace(/\s*[\(\[].*?[\)\]]\s*/g, ' ').replace(/\s+/g, ' ').trim();
-  
-  const queries = [];
-  
-  // Zapytanie podstawowe z pełnym tytułem
-  if (artist && title) {
-    queries.push(`${artist} ${title}`);
-  }
-  
-  // Bez nawiasów (często usuwa problematyczne "Radio Mix" itp)
-  if (titleNoBrackets !== title && artist && titleNoBrackets) {
-    queries.push(`${artist} ${titleNoBrackets}`);
-  }
-  
-  // Tylko tytuł (gdy artist może być błędny z YouTube)
-  if (title) {
-    queries.push(title);
-  }
-  
-  // Z wieloma artystami (np. "Calvin Harris Alesso Under Control")
+
+  const hasRemix       = /\b(remix|edit|mix|bootleg|mashup|vip)\b/i.test(title);
+  const titleNoRemix   = title.replace(/\b(remix|edit|mix|bootleg|mashup|vip)\b/gi, '').trim();
+  const titleNoBracks  = title.replace(/\s*[\(\[].*?[\)\]]\s*/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const Q = new Set();
+
+  if (artist && title) Q.add(`${artist} ${title}`);
+  if (titleNoBracks !== title && artist && titleNoBracks) Q.add(`${artist} ${titleNoBracks}`);
+  if (title) Q.add(title);
   if (artists.length > 1 && title) {
-    queries.push(`${artists[0]} ${artists[1]} ${title}`);
-    // Też bez nawiasów
-    if (titleNoBrackets !== title && titleNoBrackets) {
-      queries.push(`${artists[0]} ${artists[1]} ${titleNoBrackets}`);
-    }
+    Q.add(`${artists[0]} ${artists[1]} ${title}`);
+    if (titleNoBracks) Q.add(`${artists[0]} ${artists[1]} ${titleNoBracks}`);
   }
-  
-  // Wariant bez remix/edit (może znajdzie oryginał)
-  if (hasRemix && titleNoRemix && artist) {
-    queries.push(`${artist} ${titleNoRemix}`);
-  }
-  
-  // Kwalifikatory Spotify (track:"..." artist:"...")
-  if (artist && title) {
-    queries.push(`track:"${titleNoBrackets || title}" artist:"${artists[0]}"`);
-  }
-  
-  // Deduplikuj i ogranicz do 6 zapytań
-  return [...new Set(queries.filter(Boolean))].slice(0, 6);
+  if (hasRemix && titleNoRemix && artist) Q.add(`${artist} ${titleNoRemix}`);
+  if (artist && (titleNoBracks || title)) Q.add(`track:"${titleNoBracks || title}" artist:"${artists[0] || artist}"`);
+
+  return [...Q].slice(0, 6);
 }
 
 async function spotifySearch(q, userAccessToken, limit = 5) {
@@ -265,15 +229,12 @@ async function spotifySearch(q, userAccessToken, limit = 5) {
   url.searchParams.set('q', q);
   url.searchParams.set('type', 'track');
   url.searchParams.set('limit', String(limit));
-  const res = await fetch(url.toString(), { 
-    headers: { Authorization: `Bearer ${userAccessToken}` } 
-  });
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${userAccessToken}` } });
   const json = await res.json();
   if (!res.ok) throw new Error(`search error ${res.status}: ${JSON.stringify(json)}`);
   return json.tracks?.items || [];
 }
 
-// Grupowanie duplikatów
 function groupDuplicates(tracks) {
   const groups = [];
   const seen = new Set();
@@ -282,19 +243,13 @@ function groupDuplicates(tracks) {
     if (seen.has(idx)) return;
 
     const key = `${normArtist(track.artist || '')}_${coreTitle(track.title || '')}`;
-    const group = { 
-      master: idx, 
-      duplicates: [],
-      track 
-    };
+    const group = { master: idx, duplicates: [], track };
 
     tracks.forEach((other, otherIdx) => {
       if (otherIdx <= idx) return;
-      
       const otherKey = `${normArtist(other.artist || '')}_${coreTitle(other.title || '')}`;
       const durationDiff = Math.abs((track.durationMs || 0) - (other.durationMs || 0));
-      
-      if (otherKey === key || (key && otherKey && key === otherKey && durationDiff < 3000)) {
+      if (otherKey === key || (otherKey === key && durationDiff < 3000)) {
         group.duplicates.push(otherIdx);
         seen.add(otherIdx);
       }
@@ -306,25 +261,19 @@ function groupDuplicates(tracks) {
   return groups;
 }
 
-async function requireAuth(req, res, next) {
-  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  if (!token) return res.status(401).json({ ok: false, error: 'missing token' });
-  const { data, error } = await supa.auth.getUser(token);
-  if (error || !data?.user) return res.status(401).json({ ok: false, error: 'invalid token' });
-  req.user = data.user;
-  next();
-}
-
+// ================== Routes: misc ==================
 app.get('/ping', (req, res) => {
   res.json({ ok: true, ts: Date.now(), base: getBaseUrl(req) });
 });
 
-app.get('/spotify/login', (req, res) => {
+// ================== Routes: Spotify OAuth ==================
+// login – dostępne pod /spotify/login i /api/spotify/login
+app.get(['/spotify/login', '/api/spotify/login'], async (req, res) => {
   const frontendParam = (req.query.frontend || CORS_ORIGIN || '/').replace(/\/$/, '');
   const frontend = /\/app$/.test(frontendParam) ? frontendParam : (frontendParam + '/app');
   const jwt = req.query.token || null;
 
-  const redirect_uri = `${getBaseUrl(req)}/spotify/callback`;
+  const redirect_uri = computeRedirectUri(req);
   const scope = 'playlist-modify-private playlist-modify-public user-read-email user-read-private';
   const state = Buffer.from(JSON.stringify({ f: frontend, jwt }), 'utf8').toString('base64url');
 
@@ -341,7 +290,8 @@ app.get('/spotify/login', (req, res) => {
   res.redirect(authUrl);
 });
 
-app.get('/spotify/callback', async (req, res) => {
+// callback – dostępne pod /spotify/callback i /api/spotify/callback
+app.get(['/spotify/callback', '/api/spotify/callback'], async (req, res) => {
   try {
     const { code, state, error } = req.query;
     const parsed = (() => { 
@@ -354,7 +304,7 @@ app.get('/spotify/callback', async (req, res) => {
     if (error) return res.redirect(`${frontend}?spotify=error&reason=${encodeURIComponent(error)}`);
     if (!code) return res.status(400).send('<pre>Brak ?code z Spotify</pre>');
 
-    const redirect_uri = `${getBaseUrl(req)}/spotify/callback`;
+    const redirect_uri = computeRedirectUri(req);
 
     const tokenRes = await fetch('https://accounts.spotify.com/api/token', {
       method: 'POST',
@@ -370,7 +320,7 @@ app.get('/spotify/callback', async (req, res) => {
     }
 
     const refresh = tok.refresh_token || null;
-    const access = tok.access_token || null;
+    const access  = tok.access_token  || null;
 
     let spName = null, spUserId = null;
     if (access) {
@@ -378,7 +328,7 @@ app.get('/spotify/callback', async (req, res) => {
       const me = await meRes.json();
       if (meRes.ok) { 
         spUserId = me.id || null; 
-        spName = me.display_name || me.id || null; 
+        spName   = me.display_name || me.id || null; 
       }
     }
 
@@ -407,6 +357,7 @@ app.get('/spotify/callback', async (req, res) => {
   }
 });
 
+// status / disconnect
 app.get('/api/spotify/status', requireAuth, async (req, res) => {
   try {
     const { data, error } = await supa
@@ -432,40 +383,36 @@ app.post('/api/spotify/disconnect', requireAuth, async (req, res) => {
       .from(USER_LINKS_TABLE)
       .delete()
       .eq('user_id', req.user.id);
-
     if (error) throw error;
-
     res.json({ ok: true, message: 'Spotify disconnected' });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
 
-// ZASTĄP endpoint /api/match (od linii ~350 do ~420) tym kodem:
-
+// ================== Routes: Matching ==================
 app.post('/api/match', requireAuth, async (req, res) => {
   try {
     const { tracks = [] } = req.body || {};
     const userId = req.user.id;
-    
+
     matchProgress.set(userId, { current: 0, total: tracks.length, results: null, done: false, error: null });
-    
     res.json({ ok: true, jobId: userId, total: tracks.length });
-    
+
     (async () => {
       try {
         const userAccess = await getUserSpotifyAccessTokenByUserId(userId);
         const groups = groupDuplicates(tracks);
         const allResults = [];
-        
+
         for (let idx = 0; idx < groups.length; idx++) {
           const group = groups[idx];
           const t = group.track;
-          
+
           const queries = buildSearchQueries(t);
           const allItems = [];
           const seenIds = new Set();
-          
+
           for (const q of queries) {
             const items = await spotifySearch(q, userAccess, 5);
             for (const item of items) {
@@ -475,84 +422,76 @@ app.post('/api/match', requireAuth, async (req, res) => {
               }
             }
           }
-          
+
           let best = null, bestScore = -1;
           for (const it of allItems) {
             const s = scoreCandidate(t, it);
             if (s > bestScore) { best = it; bestScore = s; }
           }
-          
-          allResults.push({ best, bestScore, group, duplicates: group.duplicates.length });
-          
+
+          allResults.push({ best, bestScore, group });
+
           matchProgress.set(userId, { current: idx + 1, total: groups.length, results: null, done: false, error: null });
-          
           await new Promise(r => setTimeout(r, 150));
-        }        
+        }
+
+        // dynamiczny próg: >=85% trafień
         const thresholds = [0.56, 0.50, 0.45, 0.40, 0.35, 0.30];
         let chosenThreshold = 0.30;
         for (const threshold of thresholds) {
           const matched = allResults.filter(r => r.best && r.bestScore >= threshold).length;
-          if (matched / allResults.length >= 0.85) {
-            chosenThreshold = threshold;
-            break;
+          if (matched / allResults.length >= 0.85) { chosenThreshold = threshold; break; }
+        }
+
+        // wypełnij wyniki po ORYGINALNYCH indeksach
+        const out = Array(tracks.length).fill(null);
+
+        for (const result of allResults) {
+          const { best, bestScore, group } = result;
+          const duplicates = group.duplicates.length;
+
+          const masterIdx = group.master;
+          out[masterIdx] = best && bestScore >= chosenThreshold
+            ? {
+                spotifyId: best.id,
+                spotifyUrl: best.external_urls?.spotify,
+                name: best.name,
+                artists: (best.artists || []).map(a => a.name).join(', '),
+                score: Number(bestScore.toFixed(3)),
+                duplicates,
+                matched: true,
+                isDuplicate: false
+              }
+            : {
+                spotifyId: null, spotifyUrl: null, name: null, artists: null,
+                score: Number((bestScore >= 0 ? bestScore : 0).toFixed(3)),
+                duplicates,
+                matched: false,
+                isDuplicate: false
+              };
+
+          for (const dupIdx of group.duplicates) {
+            out[dupIdx] = {
+              spotifyId: null, spotifyUrl: null, name: null, artists: null,
+              score: 0, duplicates: 0, matched: false, isDuplicate: true
+            };
           }
         }
-        
-     // ... po wyliczeniu chosenThreshold i zebraniu allResults:
 
-// ZAMIANA: Zamiast pushować sekwencyjnie, wypełnij tablicę wyników po oryginalnych indeksach
-const out = Array(tracks.length).fill(null);
+        matchProgress.set(userId, {
+          current: groups.length,
+          total: groups.length,
+          results: { ok: true, results: out, threshold: chosenThreshold },
+          done: true,
+          error: null
+        });
 
-for (const result of allResults) {
-  const { best, bestScore, group } = result;
-  const duplicates = group.duplicates.length;
-
-  // miejsce „mastera” – jego oryginalny indeks:
-  const masterIdx = group.master;
-  out[masterIdx] = best && bestScore >= chosenThreshold
-    ? {
-        spotifyId: best.id,
-        spotifyUrl: best.external_urls?.spotify,
-        name: best.name,
-        artists: (best.artists || []).map(a => a.name).join(', '),
-        score: Number(bestScore.toFixed(3)),
-        duplicates,
-        matched: true,
-        isDuplicate: false
-      }
-    : {
-        spotifyId: null, spotifyUrl: null, name: null, artists: null,
-        score: Number(bestScore.toFixed(3)),
-        duplicates,
-        matched: false,
-        isDuplicate: false
-      };
-
-  // placeholdery – POD ICH ORYGINALNYMI INDEKSAMI
-  for (const dupIdx of group.duplicates) {
-    out[dupIdx] = {
-      spotifyId: null, spotifyUrl: null, name: null, artists: null,
-      score: 0, duplicates: 0, matched: false, isDuplicate: true
-    };
-  }
-}
-
-matchProgress.set(userId, {
-  current: groups.length,
-  total: groups.length,
-  results: { ok: true, results: out, threshold: chosenThreshold },
-  done: true,
-  error: null
-});
-
-        
         setTimeout(() => matchProgress.delete(userId), 5 * 60 * 1000);
-        
       } catch (e) {
         matchProgress.set(userId, { current: 0, total: 0, results: null, done: true, error: String(e) });
       }
     })();
-    
+
   } catch (e) {
     if (e && e.code === 'NO_LINK') {
       return res.status(409).json({ ok: false, error: 'Spotify not connected', code: 'NO_LINK' });
@@ -560,21 +499,19 @@ matchProgress.set(userId, {
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
-// Nowy endpoint do sprawdzania progressu
+
 app.get('/api/match/progress', requireAuth, async (req, res) => {
   const progress = matchProgress.get(req.user.id);
-  if (!progress) {
-    return res.json({ exists: false });
-  }
+  if (!progress) return res.json({ exists: false });
   res.json({ exists: true, ...progress });
 });
 
+// (opcjonalny) strumień SSE — można używać zamiast /progress
 app.post('/api/match-stream', requireAuth, async (req, res) => {
   try {
     const { tracks = [] } = req.body || {};
     const userAccess = await getUserSpotifyAccessTokenByUserId(req.user.id);
 
-    // SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -609,14 +546,12 @@ app.post('/api/match-stream', requireAuth, async (req, res) => {
 
       allResults.push({ best, bestScore, group });
 
-      // progress do frontu
       const progress = Math.round(((idx + 1) / total) * 100);
       res.write(`data: ${JSON.stringify({ type: 'progress', value: progress, current: idx + 1, total })}\n\n`);
 
       await new Promise(r => setTimeout(r, 150));
     }
 
-    // Dynamiczny próg jak w /api/match
     const thresholds = [0.56, 0.50, 0.45, 0.40, 0.35, 0.30];
     let chosenThreshold = 0.30;
     for (const threshold of thresholds) {
@@ -624,14 +559,11 @@ app.post('/api/match-stream', requireAuth, async (req, res) => {
       if (matched / allResults.length >= 0.85) { chosenThreshold = threshold; break; }
     }
 
-    // >>> KLUCZ: wypełnij wyniki po ORYGINALNYCH indeksach
     const out = Array(tracks.length).fill(null);
-
-    for (const result of allResults) {
-      const { best, bestScore, group } = result;
+    for (const { best, bestScore, group } of allResults) {
       const duplicates = group.duplicates.length;
+      const masterIdx  = group.master;
 
-      const masterIdx = group.master;
       out[masterIdx] = best && bestScore >= chosenThreshold
         ? {
             spotifyId: best.id,
@@ -645,7 +577,7 @@ app.post('/api/match-stream', requireAuth, async (req, res) => {
           }
         : {
             spotifyId: null, spotifyUrl: null, name: null, artists: null,
-            score: Number(bestScore.toFixed(3)),
+            score: Number((bestScore >= 0 ? bestScore : 0).toFixed(3)),
             duplicates,
             matched: false,
             isDuplicate: false
@@ -659,14 +591,12 @@ app.post('/api/match-stream', requireAuth, async (req, res) => {
       }
     }
 
-    // (opcjonalnie) uzupełnij ewentualne dziury
     for (let i = 0; i < out.length; i++) {
       if (!out[i]) {
         out[i] = { spotifyId:null, spotifyUrl:null, name:null, artists:null, score:0, duplicates:0, matched:false, isDuplicate:false };
       }
     }
 
-    // wyślij wynik i zamknij strumień
     res.write(`data: ${JSON.stringify({ type: 'complete', results: out, threshold: chosenThreshold })}\n\n`);
     res.end();
 
@@ -676,7 +606,7 @@ app.post('/api/match-stream', requireAuth, async (req, res) => {
   }
 });
 
-
+// ================== Routes: Playlist creation ==================
 app.post('/api/playlist', requireAuth, async (req, res) => {
   try {
     const { name = PLAYLIST_NAME, trackUris = [] } = req.body || {};
@@ -688,6 +618,7 @@ app.post('/api/playlist', requireAuth, async (req, res) => {
     const me = await getSpotifyMe(userAccess);
     const userId = me.id;
 
+    // create playlist
     let r = await fetch(`https://api.spotify.com/v1/users/${encodeURIComponent(userId)}/playlists`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${userAccess}`, 'Content-Type': 'application/json' },
@@ -696,6 +627,7 @@ app.post('/api/playlist', requireAuth, async (req, res) => {
     let pj = await r.json();
     if (!r.ok) throw new Error(`create playlist: ${r.status} ${JSON.stringify(pj)}`);
 
+    // add tracks (batch 100)
     for (let i = 0; i < trackUris.length; i += 100) {
       const slice = trackUris.slice(i, i + 100);
       r = await fetch(`https://api.spotify.com/v1/playlists/${pj.id}/tracks`, {
@@ -720,6 +652,7 @@ app.post('/api/playlist', requireAuth, async (req, res) => {
   }
 });
 
+// ================== Routes: Cloud (Supabase Storage) ==================
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.get('/api/cloud/list', requireAuth, async (req, res) => {
@@ -760,7 +693,6 @@ app.post('/api/upload', requireAuth, upload.array('files', 50), async (req, res)
 app.delete('/api/cloud/delete', requireAuth, async (req, res) => {
   try {
     const { filenames = [] } = req.body;
-    
     if (!Array.isArray(filenames) || filenames.length === 0) {
       return res.status(400).json({ ok: false, error: 'Brak plików do usunięcia' });
     }
@@ -770,30 +702,23 @@ app.delete('/api/cloud/delete', requireAuth, async (req, res) => {
       filenames.map(async (filename) => {
         const path = prefix + filename;
         const { error } = await supa.storage.from(SUPABASE_BUCKET).remove([path]);
-        return { 
-          name: filename, 
-          ok: !error, 
-          error: error?.message 
-        };
+        return { name: filename, ok: !error, error: error?.message };
       })
     );
 
     const deleted = results.filter(r => r.ok).length;
-    const failed = results.filter(r => !r.ok);
+    const failed  = results.filter(r => !r.ok).length;
 
-    res.json({ 
-      ok: true, 
-      deleted, 
-      failed: failed.length,
-      results 
-    });
+    res.json({ ok: true, deleted, failed, results });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
 
+// ================== Start ==================
 app.listen(PORT, () => {
   console.log(`🚀 ReLink API on http://localhost:${PORT}`);
   console.log('📡 CORS_ORIGIN:', CORS_ORIGIN || '(*)');
+  console.log('🎵 Spotify redirect (dynamic by path): <base>[ /api ]/spotify/callback');
   console.log('💾 USER_LINKS_TABLE:', USER_LINKS_TABLE);
 });
