@@ -13,8 +13,6 @@ import Stepper from "./components/Stepper.jsx";
 import Toolbar from "./components/Toolbar.jsx";
 import StickyBar from "./components/StickyBar.jsx";
 import ConnectSpotifyButton from './components/ConnectSpotifyButton';
-// ...
-<ConnectSpotifyButton />
 
 
 import { API_BASE, authHeaders, safeJson } from "../../lib/api";
@@ -339,23 +337,7 @@ export default function ImportPage() {
           <h1 className="text-xl font-bold">ReLink</h1>
 
           <div className="flex items-center gap-3">
-            {isSpotifyConnected ? (
-              <>
-                <span className="chip">Connected: {spName}</span>
-                <button type="button" className="btn btn-neutral" onClick={disconnectSpotify}>
-                  Disconnect
-                </button>
-              </>
-            ) : (
-              <a
-                className={`btn ${authToken ? "btn-primary" : "btn-disabled"}`}
-                href={authToken ? loginHref : undefined}
-                onClick={(e) => { if (!authToken) e.preventDefault(); }}
-                title={authToken ? "Connect your Spotify account" : "Loading auth…"}
-              >
-                Connect Spotify
-              </a>
-            )}
+            
           </div>
         </header>
 

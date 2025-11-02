@@ -42,9 +42,12 @@ export default function Importer({ apiBase }) {
   const [flash, setFlash] = useState(null)
   const [connecting, setConnecting] = useState(false)
 
-  const folderInputRef = useRef(null)
+  // >>> spójne refy + handler
+  const folderRef = useRef(null)
   const multiInputRef = useRef(null)
+  const onFilesSelected = (e) => handleFiles(e.target.files)
 
+  // wymuś logowanie
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       if (!data?.session) nav('/')
@@ -69,7 +72,7 @@ export default function Importer({ apiBase }) {
     }
   }
 
-  useEffect(() => { fetchSpotifyStatus() }, [])
+  useEffect(() => { fetchSpotifyStatus() }, []) // eslint-disable-line
   useEffect(() => { if (tab === 'cloud') loadCloud() }, [tab])
   useEffect(() => {
     const url = new URL(window.location.href)
@@ -83,15 +86,15 @@ export default function Importer({ apiBase }) {
       window.history.replaceState({}, '', url.toString())
       setTimeout(()=>setFlash(null), 4000)
     }
-  }, [location.key])
+  }, [location.key]) // nasłuchuj powrotu z OAuth
 
   async function handleFiles(fileList) {
     const arr = Array.from(fileList || []).filter(f => /\.(mp3|m4a|wav|flac|aac|ogg)$/i.test(f.name))
     if (!arr.length) return
-    
+
     setLoadingFiles(true)
     setLoadingProgress(0)
-    
+
     const mapped = []
     for (let i = 0; i < arr.length; i++) {
       const f = arr[i]
@@ -100,7 +103,7 @@ export default function Importer({ apiBase }) {
       mapped.push({ file: f, name: f.name, artist, title, durationMs })
       setLoadingProgress(Math.round(((i + 1) / arr.length) * 100))
     }
-    
+
     setFiles(prev => [...prev, ...mapped])
     setLoadingFiles(false)
     setLoadingProgress(0)
@@ -112,7 +115,7 @@ export default function Importer({ apiBase }) {
     setMatched([])
     setSelected(new Set())
     setScanProgress(0)
-    
+
     try {
       const payload = {
         tracks: files.map(f => ({
@@ -121,14 +124,14 @@ export default function Importer({ apiBase }) {
           durationMs: f.durationMs || 0,
         })),
       }
-      
+
       const res = await fetch(`${apiBase}/api/match`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
         body: JSON.stringify(payload),
       })
       const data = await safeJson(res)
-      
+
       if (!data.ok) {
         if (data.code === 'NO_LINK') {
           alert('Nie połączono ze Spotify.')
@@ -136,42 +139,42 @@ export default function Importer({ apiBase }) {
         }
         throw new Error(data.error || 'match failed')
       }
-      
+
       const pollInterval = setInterval(async () => {
         try {
           const progressRes = await fetch(`${apiBase}/api/match/progress`, {
             headers: { ...(await authHeaders()) }
           })
           const progressData = await safeJson(progressRes)
-          
+
           if (!progressData.exists) {
             clearInterval(pollInterval)
             return
           }
-          
+
           if (progressData.current && progressData.total) {
             const percent = Math.round((progressData.current / progressData.total) * 100)
             setScanProgress(percent)
           }
-          
+
           if (progressData.done) {
             clearInterval(pollInterval)
-            
+
             if (progressData.error) {
               throw new Error(progressData.error)
             }
-            
+
             if (progressData.results) {
               setMatched(progressData.results.results || [])
               const matchCount = progressData.results.results.filter(m => m.matched).length
               const totalCount = progressData.results.results.filter(m => !m.isDuplicate).length
-              setFlash({ 
-                type: 'ok', 
-                text: `Dopasowano ${matchCount}/${totalCount} utworów (próg: ${progressData.results.threshold})` 
+              setFlash({
+                type: 'ok',
+                text: `Dopasowano ${matchCount}/${totalCount} utworów (próg: ${progressData.results.threshold})`
               })
               setTimeout(() => setFlash(null), 5000)
             }
-            
+
             setScanning(false)
             setScanProgress(0)
           }
@@ -182,7 +185,7 @@ export default function Importer({ apiBase }) {
           setScanProgress(0)
         }
       }, 500)
-      
+
     } catch (e) {
       alert('Błąd dopasowania: ' + e.message)
       setScanning(false)
@@ -193,9 +196,9 @@ export default function Importer({ apiBase }) {
   async function createPlaylist() {
     const indices = [...selected]
     const tracksToAdd = indices.map(i => matched[i]).filter(m => m?.matched && m?.spotifyId)
-    
+
     if (!tracksToAdd.length) return alert('Zaznacz dopasowane utwory do playlisty.')
-    
+
     try {
       const trackUris = tracksToAdd.map(m => `spotify:track:${m.spotifyId}`)
       const res = await fetch(`${apiBase}/api/playlist`, {
@@ -241,7 +244,7 @@ export default function Importer({ apiBase }) {
   async function deleteSelected() {
     if (!selected.size) return alert('Zaznacz pliki do usunięcia.')
     if (!confirm(`Usunąć ${selected.size} zaznaczonych plików?`)) return
-    
+
     const indices = [...selected].sort((a,b) => b - a)
     setFiles(prev => prev.filter((_, i) => !indices.includes(i)))
     setMatched(prev => prev.filter((_, i) => !indices.includes(i)))
@@ -251,29 +254,29 @@ export default function Importer({ apiBase }) {
   async function deleteCloudFiles() {
     if (!cloudSelected.size) return alert('Zaznacz pliki do usunięcia.')
     if (!confirm(`Usunąć ${cloudSelected.size} ${cloudSelected.size === 1 ? 'plik' : 'plików'} z chmury?`)) return
-    
+
     try {
       const filenames = [...cloudSelected].map(idx => cloudFiles[idx].name)
-      
+
       const res = await fetch(`${apiBase}/api/cloud/delete`, {
         method: 'DELETE',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          ...(await authHeaders()) 
+          ...(await authHeaders())
         },
         body: JSON.stringify({ filenames }),
       })
-      
+
       const data = await safeJson(res)
-      
+
       if (!data.ok) throw new Error(data.error || 'delete failed')
-      
-      setFlash({ 
-        type: 'ok', 
-        text: `Usunięto ${data.deleted} ${data.deleted === 1 ? 'plik' : 'plików'}${data.failed > 0 ? `, błędy: ${data.failed}` : ''}` 
+
+      setFlash({
+        type: 'ok',
+        text: `Usunięto ${data.deleted} ${data.deleted === 1 ? 'plik' : 'plików'}${data.failed > 0 ? `, błędy: ${data.failed}` : ''}`
       })
       setTimeout(() => setFlash(null), 4000)
-      
+
       setCloudSelected(new Set())
       await loadCloud()
     } catch (e) {
@@ -304,16 +307,15 @@ export default function Importer({ apiBase }) {
     try {
       const { data } = await supabase.auth.getSession()
       const token = data.session?.access_token || ''
-      if (!token) { 
-        alert('Najpierw zaloguj się.') 
-        return 
+      if (!token) {
+        alert('Najpierw zaloguj się.')
+        return
       }
-      
+
       const origin = window.location.origin
       const frontendUrl = `${origin}/app`
-      
       const url = `${apiBase}/spotify/login?frontend=${encodeURIComponent(frontendUrl)}&token=${encodeURIComponent(token)}`
-      
+
       setConnecting(true)
       window.location.assign(url)
     } catch (e) {
@@ -324,16 +326,16 @@ export default function Importer({ apiBase }) {
 
   async function disconnectSpotify() {
     if (!confirm('Odłączyć Spotify?')) return
-    
+
     try {
       const res = await fetch(`${apiBase}/api/spotify/disconnect`, {
         method: 'POST',
         headers: { ...(await authHeaders()) },
       })
       const data = await safeJson(res)
-      
+
       if (!data.ok) throw new Error(data.error || 'disconnect failed')
-      
+
       setSpName(null)
       setFlash({ type: 'ok', text: 'Odłączono Spotify' })
       setTimeout(() => setFlash(null), 3000)
@@ -405,11 +407,11 @@ export default function Importer({ apiBase }) {
               </div>
             ) : (
               <button onClick={connectSpotify} disabled={connecting}
-                style={{ 
-                  padding:'7px 14px', 
-                  border:'1px solid #1DB954', 
-                  background:'#1DB954', 
-                  color:'#fff', 
+                style={{
+                  padding:'7px 14px',
+                  border:'1px solid #1DB954',
+                  background:'#1DB954',
+                  color:'#fff',
                   borderRadius:8,
                   cursor: connecting ? 'wait' : 'pointer',
                   fontSize:14,
@@ -442,10 +444,18 @@ export default function Importer({ apiBase }) {
               </div>
 
               <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:10 }}>
-                <button onClick={()=>folderInputRef.current?.click()} disabled={loadingFiles} style={{ padding:'6px 10px' }}>
+                <button onClick={()=>folderRef.current?.click()} disabled={loadingFiles} style={{ padding:'6px 10px' }}>
                   {loadingFiles ? 'Ładowanie…' : 'Wybierz folder'}
                 </button>
-                <input ref={folderInputRef} type="file" style={{ display:'none' }} webkitdirectory="true" directory="true" multiple onChange={e=>handleFiles(e.target.files)} />
+                <input
+                  ref={folderRef}
+                  type="file"
+                  className="sr-only"
+                  multiple
+                  onChange={onFilesSelected}
+                  {.../** @type {any} */ ({ webkitdirectory: "", directory: "" })}
+                />
+
                 <button onClick={()=>multiInputRef.current?.click()} disabled={loadingFiles} style={{ padding:'6px 10px' }}>
                   {loadingFiles ? 'Ładowanie…' : 'Wybierz pliki'}
                 </button>
@@ -475,7 +485,7 @@ export default function Importer({ apiBase }) {
                 <button onClick={scanAndMatch} disabled={scanning || !files.length} style={{ padding:'6px 12px', fontWeight:500, background:'#1d4ed8', color:'#fff', border:'1px solid #1e40af', borderRadius:6 }}>
                   {scanning ? 'Dopasowuję…' : 'Skanuj i dopasuj'}
                 </button>
-                
+
                 {matched.length > 0 && (
                   <>
                     <button onClick={selectAll} style={{ padding:'6px 10px', fontSize:13, border:'1px solid #6b7280', background:'#f9fafb', color:'#374151', borderRadius:6 }}>
@@ -512,96 +522,94 @@ export default function Importer({ apiBase }) {
                     <th style={{ textAlign:'center', width:60 }}>Zaznacz</th>
                   </tr>
                 </thead>
-                
 
-<tbody>
-  {matched.length > 0 ? (
-    matched.map((m, i) => {
-      const f = files[i]; // <<< kluczowe: 1:1 z wynikami
+                <tbody>
+                  {matched.length > 0 ? (
+                    matched.map((m, i) => {
+                      const f = files[i]; // 1:1 z wynikami zwróconymi przez backend
 
-      if (m?.isDuplicate) {
-        // Wiersz duplikatu – pokaż nazwę pliku i informację, że pominięto
-        return (
-          <tr key={i} style={{ borderTop:'1px solid #eee', background:'#fafafa' }}>
-            <td style={{ textAlign:'center' }}>
-              <span style={{ color:'#999', fontSize:18 }}>⊗</span>
-            </td>
-            <td style={{ fontSize:13, color:'#999' }}>{f?.name || '-'}</td>
-            <td style={{ fontSize:13, color:'#999' }}>{f?.artist || '-'}</td>
-            <td colSpan={1} style={{ color:'#999', fontSize:12, fontStyle:'italic' }}>
-              (duplikat — pominięto)
-            </td>
-            <td style={{ textAlign:'center' }}>
-              <input type="checkbox" disabled style={{ opacity: 0.3 }} />
-            </td>
-          </tr>
-        )
-      }
+                      if (m?.isDuplicate) {
+                        return (
+                          <tr key={i} style={{ borderTop:'1px solid #eee', background:'#fafafa' }}>
+                            <td style={{ textAlign:'center' }}>
+                              <span style={{ color:'#999', fontSize:18 }}>⊗</span>
+                            </td>
+                            <td style={{ fontSize:13, color:'#999' }}>{f?.name || '-'}</td>
+                            <td style={{ fontSize:13, color:'#999' }}>{f?.artist || '-'}</td>
+                            <td colSpan={1} style={{ color:'#999', fontSize:12, fontStyle:'italic' }}>
+                              (duplikat — pominięto)
+                            </td>
+                            <td style={{ textAlign:'center' }}>
+                              <input type="checkbox" disabled style={{ opacity: 0.3 }} />
+                            </td>
+                          </tr>
+                        )
+                      }
 
-      const isMatched = m?.matched
-      const checked = selected.has(i)
+                      const isMatched = m?.matched
+                      const checked = selected.has(i)
 
-      return (
-        <tr key={i} style={{ borderTop:'1px solid #eee' }}>
-          <td style={{ textAlign:'center' }}>
-            <span style={{ fontSize:20 }}>{isMatched ? '🟢' : '🟡'}</span>
-          </td>
-          <td style={{ fontSize:13 }}>{f?.name || '?'}</td>
-          <td style={{ fontSize:13 }}>{f?.artist || '-'}</td>
-          <td style={{ fontSize:13 }}>
-            {m?.spotifyUrl ? (
-              <a href={m.spotifyUrl} target="_blank" rel="noreferrer">
-                {m.name} — {m.artists}
-              </a>
-            ) : (
-              <span style={{ color:'#999' }}>Brak dopasowania</span>
-            )}
-            {m?.duplicates > 0 && (
-              <span style={{ marginLeft:6, fontSize:11, color:'#f59e0b' }}>
-                (+{m.duplicates} {m.duplicates === 1 ? 'kopia' : 'kopii'})
-              </span>
-            )}
-          </td>
-          <td style={{ textAlign:'center' }}>
-            <input 
-              type="checkbox" 
-              checked={checked} 
-              onChange={e=>{
-                setSelected(prev=>{
-                  const next=new Set(prev)
-                  if(e.target.checked) next.add(i)
-                  else next.delete(i)
-                  return next
-                })
-              }}
-            />
-          </td>
-        </tr>
-      )
-    })
-  ) : (
-    files.map((f,i)=>(
-      <tr key={i} style={{ borderTop:'1px solid #eee' }}>
-        <td style={{ textAlign:'center' }}>
-          <span style={{ fontSize:20 }}>⚪</span>
-        </td>
-        <td style={{ fontSize:13 }}>{f.name}</td>
-        <td style={{ fontSize:13 }}>{f.artist || '-'}</td>
-        <td style={{ fontSize:13, color:'#999' }}>
-          Kliknij "Skanuj i dopasuj"
-        </td>
-        <td style={{ textAlign:'center' }}>
-          <input type="checkbox" disabled style={{ opacity: 0.3 }} />
-        </td>
-      </tr>
-    ))
-  )}
-  {!files.length && (
-    <tr><td colSpan={5} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
-      Dodaj pliki by rozpocząć
-    </td></tr>
-  )}
-</tbody>
+                      return (
+                        <tr key={i} style={{ borderTop:'1px solid #eee' }}>
+                          <td style={{ textAlign:'center' }}>
+                            <span style={{ fontSize:20 }}>{isMatched ? '🟢' : '🟡'}</span>
+                          </td>
+                          <td style={{ fontSize:13 }}>{f?.name || '?'}</td>
+                          <td style={{ fontSize:13 }}>{f?.artist || '-'}</td>
+                          <td style={{ fontSize:13 }}>
+                            {m?.spotifyUrl ? (
+                              <a href={m.spotifyUrl} target="_blank" rel="noreferrer">
+                                {m.name} — {m.artists}
+                              </a>
+                            ) : (
+                              <span style={{ color:'#999' }}>Brak dopasowania</span>
+                            )}
+                            {m?.duplicates > 0 && (
+                              <span style={{ marginLeft:6, fontSize:11, color:'#f59e0b' }}>
+                                (+{m.duplicates} {m.duplicates === 1 ? 'kopia' : 'kopii'})
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ textAlign:'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={e=>{
+                                setSelected(prev=>{
+                                  const next=new Set(prev)
+                                  if(e.target.checked) next.add(i)
+                                  else next.delete(i)
+                                  return next
+                                })
+                              }}
+                            />
+                          </td>
+                        </tr>
+                      )
+                    })
+                  ) : (
+                    files.map((f,i)=>(
+                      <tr key={i} style={{ borderTop:'1px solid #eee' }}>
+                        <td style={{ textAlign:'center' }}>
+                          <span style={{ fontSize:20 }}>⚪</span>
+                        </td>
+                        <td style={{ fontSize:13 }}>{f.name}</td>
+                        <td style={{ fontSize:13 }}>{f.artist || '-'}</td>
+                        <td style={{ fontSize:13, color:'#999' }}>
+                          Kliknij "Skanuj i dopasuj"
+                        </td>
+                        <td style={{ textAlign:'center' }}>
+                          <input type="checkbox" disabled style={{ opacity: 0.3 }} />
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                  {!files.length && (
+                    <tr><td colSpan={5} style={{ color:'#777', fontStyle:'italic', textAlign:'center', padding:20 }}>
+                      Dodaj pliki by rozpocząć
+                    </td></tr>
+                  )}
+                </tbody>
 
               </table>
             </div>
@@ -615,40 +623,40 @@ export default function Importer({ apiBase }) {
               <button onClick={loadCloud} disabled={cloudLoading} style={{ padding:'4px 10px' }}>
                 {cloudLoading ? 'Odświeżam…' : 'Odśwież'}
               </button>
-              
+
               {cloudFiles.length > 0 && (
                 <>
-                  <button 
-                    onClick={selectAllCloud} 
-                    style={{ 
-                      padding:'4px 10px', 
-                      fontSize:13, 
-                      border:'1px solid #6b7280', 
-                      background:'#f9fafb', 
-                      borderRadius:6 
+                  <button
+                    onClick={selectAllCloud}
+                    style={{
+                      padding:'4px 10px',
+                      fontSize:13,
+                      border:'1px solid #6b7280',
+                      background:'#f9fafb',
+                      borderRadius:6
                     }}>
                     Zaznacz wszystkie
-                    </button>
-                  <button 
-                    onClick={deselectAllCloud} 
-                    style={{ 
-                      padding:'4px 10px', 
-                      fontSize:13, 
-                      border:'1px solid #6b7280', 
-                      background:'#f9fafb', 
-                      borderRadius:6 
+                  </button>
+                  <button
+                    onClick={deselectAllCloud}
+                    style={{
+                      padding:'4px 10px',
+                      fontSize:13,
+                      border:'1px solid #6b7280',
+                      background:'#f9fafb',
+                      borderRadius:6
                     }}>
                     Odznacz wszystkie
                   </button>
-                  <button 
-                    onClick={deleteCloudFiles} 
+                  <button
+                    onClick={deleteCloudFiles}
                     disabled={!cloudSelected.size}
-                    style={{ 
-                      padding:'6px 12px', 
-                      fontSize:13, 
+                    style={{
+                      padding:'6px 12px',
+                      fontSize:13,
                       fontWeight:500,
-                      border:'1px solid #dc2626', 
-                      background: cloudSelected.size ? '#dc2626' : '#fee2e2', 
+                      border:'1px solid #dc2626',
+                      background: cloudSelected.size ? '#dc2626' : '#fee2e2',
                       color: cloudSelected.size ? '#fff' : '#dc2626',
                       borderRadius:6,
                       cursor: cloudSelected.size ? 'pointer' : 'not-allowed'
@@ -674,9 +682,9 @@ export default function Importer({ apiBase }) {
                   return (
                     <tr key={idx} style={{ borderTop:'1px solid #eee', background: checked ? '#f0f9ff' : 'transparent' }}>
                       <td style={{ textAlign:'center' }}>
-                        <input 
-                          type="checkbox" 
-                          checked={checked} 
+                        <input
+                          type="checkbox"
+                          checked={checked}
                           onChange={e=>{
                             setCloudSelected(prev=>{
                               const next = new Set(prev)

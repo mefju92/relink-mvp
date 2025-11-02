@@ -2,7 +2,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
-import "./index.css";
+import './index.css'
 import "./styles/tokens.css";
 
 import ImportPage from "./features/import/ImportPage.jsx";
