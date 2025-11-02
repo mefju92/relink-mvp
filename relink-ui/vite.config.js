@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Pełny plik: proxy kieruje /api/* oraz /cloud/* do backendu na :5174
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -11,10 +10,16 @@ export default defineConfig({
         target: 'http://localhost:5174',
         changeOrigin: true,
       },
-      '/cloud': {
+      // potrzebne do /spotify/login i /spotify/callback
+      '/spotify': {
         target: 'http://localhost:5174',
         changeOrigin: true,
       },
+      // (opcjonalnie) usuń, bo backend używa /api/cloud/*
+      // '/cloud': {
+      //   target: 'http://localhost:5174',
+      //   changeOrigin: true,
+      // },
     },
   },
 })

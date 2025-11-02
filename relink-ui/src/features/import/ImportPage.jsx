@@ -12,6 +12,10 @@ import DataTable from "./components/DataTable.jsx";
 import Stepper from "./components/Stepper.jsx";
 import Toolbar from "./components/Toolbar.jsx";
 import StickyBar from "./components/StickyBar.jsx";
+import ConnectSpotifyButton from './components/ConnectSpotifyButton';
+// ...
+<ConnectSpotifyButton />
+
 
 import { API_BASE, authHeaders, safeJson } from "../../lib/api";
 import { cleanTitle, cleanArtist, readTagFromName, measureDurationMs, msToMMSS } from "../../lib/tracks";
@@ -67,8 +71,14 @@ export default function ImportPage() {
   // ---------------- Spotify status ----------------
   async function refreshSpotifyStatus() {
     try {
-      const res = await fetch(`${API_BASE}/spotify/status`, { headers: { ...(await authHeaders()) } });
-      const data = await safeJson(res);
+      const headers = await authHeaders();
+      const res = await fetch(`${API_BASE}/spotify/status`, { headers });
+      const txt = await res.text();
+      // DEBUG – podejrzyj w Network/Console co wraca; usuń później
+      console.log("[spotify/status]", res.status, txt);
+
+      let data = null;
+      try { data = JSON.parse(txt); } catch {}
       setSpName(data?.connected ? (data?.name || "Connected") : null);
     } catch {
       setSpName(null);
@@ -267,7 +277,6 @@ export default function ImportPage() {
   async function deleteSelected() {
     const ids = rows.filter(r => r.added).map(r => r.id);
     if (!ids.length) return;
-    // lokalnie
     setRows(prev => prev.filter(r => !ids.includes(r.id)));
     try {
       await fetch(`${API_BASE}/files`, {
@@ -305,8 +314,8 @@ export default function ImportPage() {
   const matchingDone  = rows.some(r => r.status === "ok");
   const playlistsDone = playlistDone;
 
-  // aktywny krok = pierwszy nieukończony
-  const currentStep = !filesDone ? 0 : !matchingDone ? 1 : 2;
+  // Uwaga: Stepper jest 1-based
+  const currentStep = !filesDone ? 1 : !matchingDone ? 2 : 3;
 
   const showEmpty = rows.length === 0 && !query;
   const selectedMatched = rows.filter(r => r.added && r.status === "ok");
