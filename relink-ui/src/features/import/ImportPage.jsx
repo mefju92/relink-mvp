@@ -116,6 +116,21 @@ export default function ImportPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  
+async function connectSpotify() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const jwt = session?.access_token;
+    if (!jwt) { alert("Najpierw zaloguj się."); return; }
+
+    const frontend = `${window.location.origin}/app`; // dokąd wracamy po OAuth
+    const url = `${API_BASE}/spotify/login?token=${encodeURIComponent(jwt)}&frontend=${encodeURIComponent(frontend)}`;
+    window.location.assign(url);
+  } catch (e) {
+    alert("Błąd: " + (e?.message || e));
+  }
+}
+
 
   async function disconnectSpotify() {
     if (!confirm("Odłączyć Spotify?")) return;
